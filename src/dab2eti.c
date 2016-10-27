@@ -61,7 +61,16 @@ static void *demod_thread_fn(void *arg)
 {
   struct dab_state_t *dab = arg;
   struct sdr_state_t *sdr = dab->device_state;
-  int i,j;
+  /* int i,j; */
+
+  const int cfs_clamp = 8;
+  const int cfs_min_run = 4;
+  const int cfs_rand_thr = 10;
+
+  unsigned int orig_frequency = sdr->frequency;
+  int prev_coarse_freq_shift = 0;
+  int coarse_freq_shift_run_length = 0;
+  int coarse_freq_shifts_ignored = 0;
 
   while (!do_exit) {
     sem_wait(&data_ready);
@@ -73,38 +82,94 @@ static void *demod_thread_fn(void *arg)
     // calculate error rates
     //dab_analyzer_calculate_error_rates(&ana,dab);
 
-    int prev_freq = sdr->frequency;
-    if (abs(sdr->coarse_freq_shift)>1) {
-      if (sdr->coarse_freq_shift<0)
-	sdr->frequency = sdr->frequency -1000;
-      else
-	sdr->frequency = sdr->frequency +1000;
-      
-      rtlsdr_set_center_freq(dev,sdr->frequency);
-      
+    unsigned int prev_freq = sdr->frequency;
+
+    // TODO instead of this run length stuff, we could also try to etimate
+    // the correlation in dab_coarse_freq_sync_2
+
+    // TODO This whole tuning process should generally favour going to
+    // the frequency given on the command line.  Otherwise we'll always have
+    // the problem that the tuning just wanders off to nowhere.
+
+    /* clamp, because values around +/-14 tend to be unreliable IME */
+    int coarse_freq_shift_clamped = sdr->coarse_freq_shift;
+    if (coarse_freq_shift_clamped >= cfs_clamp) {
+      coarse_freq_shift_clamped = cfs_clamp;
+    }
+    if (coarse_freq_shift_clamped <= -cfs_clamp) {
+      coarse_freq_shift_clamped = -cfs_clamp;
     }
     
-    if (abs(sdr->coarse_freq_shift) ==1) {
+    // we get 0 if a time shift was done or queue wasn't full etc.
+    if (coarse_freq_shift_clamped != 0) {
+      if (coarse_freq_shift_clamped == prev_coarse_freq_shift) {
+	coarse_freq_shift_run_length++;
+      }
+      else {
+	coarse_freq_shift_run_length = 0;
+      }
+      coarse_freq_shifts_ignored++;
+
+      if (coarse_freq_shift_run_length < cfs_min_run) {
+	fprintf(stderr, 
+		"coarse frequency shift indicated, waiting for confirmation : +/-%d|%3d| %3d %3d %3d\n", 
+		cfs_clamp, prev_coarse_freq_shift, 
+		sdr->coarse_freq_shift, coarse_freq_shift_run_length,
+		coarse_freq_shifts_ignored);
+      }
+
+      prev_coarse_freq_shift = coarse_freq_shift_clamped;
+    }
+
+
+
+    /* if (abs(sdr->coarse_freq_shift)>1) { */
+    if (abs(coarse_freq_shift_clamped) > 1 && coarse_freq_shift_run_length >= cfs_min_run) {
+      // int shift = ((coarse_freq_shift_clamped > 0) ? 1 : -1);
+      // the first read after a frequency shift is usually not so good, so we try this:
+      int shift = coarse_freq_shift_clamped;
+      // int shift = coarse_freq_shift_clamped / 2; // not really better
+
+      sdr->frequency = sdr->frequency += 1000*shift;
+      // make next shift easier: (doesn't work so good, see above)
+      prev_coarse_freq_shift -= shift;
+      coarse_freq_shift_run_length-=2;
       
-      if (sdr->coarse_freq_shift<0)
-	sdr->frequency = sdr->frequency -rand() % 1000;
-      else
-	sdr->frequency = sdr->frequency +rand() % 1000;
-      
+      rtlsdr_set_center_freq(dev, sdr->frequency);
+      fprintf(stderr, "coarse shift done : %i\n", rtlsdr_get_center_freq(dev));
+      coarse_freq_shifts_ignored = 0;
+    }
+
+    /* if (abs(sdr->coarse_freq_shift) ==1) { */
+    if (abs(coarse_freq_shift_clamped) == 1 && coarse_freq_shift_run_length >= cfs_min_run) {
+      sdr->frequency += (rand() % 1000) * coarse_freq_shift_clamped;
+
       rtlsdr_set_center_freq(dev,sdr->frequency);
-      //fprintf(stderr,"new center freq : %i\n",rtlsdr_get_center_freq(dev));
+      fprintf(stderr,"new center freq : %i\n",rtlsdr_get_center_freq(dev));//
+      coarse_freq_shifts_ignored = 0;
+    }
+
+    // On my receiver, reception seems to be really bad when we're just 1kHz away.
+    // I'm getteing lots of rather random coarse_freq_shift-s
+    if (abs(coarse_freq_shift_clamped) > 1 && coarse_freq_shifts_ignored > cfs_rand_thr) {
+      int preference = ((sdr->frequency > orig_frequency) ? 1000 : 500);
+      sdr->frequency += (rand() % 1500) - preference;
       
-    } 
+      rtlsdr_set_center_freq(dev, sdr->frequency);
+      fprintf(stderr, "random center freq adjustment : %i\n", rtlsdr_get_center_freq(dev));
+      coarse_freq_shifts_ignored = 0;
+    }
+
     if (abs(sdr->coarse_freq_shift)<1 && (abs(sdr->fine_freq_shift) > 50)) {
       sdr->frequency = sdr->frequency + (sdr->fine_freq_shift/3);
       rtlsdr_set_center_freq(dev,sdr->frequency);
-      //fprintf(stderr,"ffs : %f\n",sdr->fine_freq_shift);
-
+      fprintf(stderr,"                                          ffs : %f\n",sdr->fine_freq_shift);//
+      sdr->fine_freq_shift = 0;  // joerg: otherwise this will wander away on every half-read frame
     }
 
-    //if (sdr->frequency != prev_freq) {
-    //  fprintf(stderr,"Adjusting centre-frequency to %dHz\n",sdr->frequency);
-    //}    
+    if (sdr->frequency != prev_freq) {
+      fprintf(stderr,"Adjusting centre-frequency to %dHz\n",sdr->frequency);
+    }    
     ccount += 1;
     if (ccount == 10) {
       ccount = 0;
@@ -299,4 +364,5 @@ int main(int argc, char* argv[])
     dab->device_type = DAB_DEVICE_RTLSDR;
     do_sdr_decode(dab,frequency,gain);
   }
+  return 1;
 }

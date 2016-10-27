@@ -21,12 +21,15 @@ david.may.muc@googlemail.com
 
 #include "dab.h"
 #include "dab_tables.h"
+#include "dab_constants.h"
 #include "input_sdr.h"
 #include "sdr_sync.h"
 
 int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr){
   int i,j;
 
+  //fprintf(stderr, "sdr_demod\n");
+  //fprintf(stderr, ".");
   tf->has_fic = 0;
 
   /* resetting coarse freqshift */
@@ -38,32 +41,35 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
   }
 
   /* Check for data in fifo */
-  if (sdr->fifo.count < 196608*3) {
+  if (sdr->fifo.count < DAB_T_FRAME * 3) {
+    // fprintf(stderr, "   no data in fifo %d < %d\n", sdr->fifo.count, DAB_T_FRAME * 3);
     return 0;
   }
   
   /* read fifo */
-  sdr_read_fifo(&(sdr->fifo),196608*2,sdr->coarse_timeshift+sdr->fine_timeshift,sdr->buffer);
+  sdr_read_fifo(&(sdr->fifo), DAB_T_FRAME * 2, sdr->coarse_timeshift+sdr->fine_timeshift, sdr->buffer);
 
 
   
   /* give the AGC some time to settle */
   if (sdr->startup_delay<=GAIN_SETTLE_TIME) {
+    // (frame has been read and will be thrown away)
     sdr->startup_delay+=1;
-    fprintf(stderr,"startup_delay=%i\n",sdr->startup_delay);
+    fprintf(stderr, "   startup_delay=%i\n",sdr->startup_delay);
     return 0;
   }
   
 
 
   /* complex data conversion */
-  for (j=0;j<196608*2;j+=2){
+  for (j=0; j<DAB_T_FRAME*2; j+=2){
     sdr->real[j/2]=sdr->buffer[j]-127;
     sdr->imag[j/2]=sdr->buffer[j+1]-127;
   }
 
-  /* resetting coarse timeshift */
-  sdr->coarse_timeshift = 0;
+  // unnecessary, it will be assigned afterwards
+  /* /\* resetting coarse timeshift *\/ */
+  /* sdr->coarse_timeshift = 0; */
 
   /* coarse time sync */
   /* performance bottleneck atm */
@@ -71,30 +77,34 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
   // we are not in sync so -> next frame
   sdr->force_timesync=0;
   if (sdr->coarse_timeshift) {
-    //printf("coarse time shift\n");
+    // fprintf(stderr, "   coarse time shift %d\n", sdr->coarse_timeshift);//
     return 0;
   }
 
   /* create complex frame */
-  for (j=0;j<196608;j++){
+  for (j=0; j<DAB_T_FRAME; j++){
     sdr->dab_frame[j][0] = sdr->real[j];
     sdr->dab_frame[j][1] = sdr->imag[j];
   }
 
   /* fine time sync */
   sdr->fine_timeshift = dab_fine_time_sync(sdr->dab_frame);
-  if (sdr->coarse_freq_shift) {
+  if (sdr->coarse_freq_shift) { // TODO value is reset to 0 earlier in this function
     sdr->fine_timeshift = 0;
     }
   /* coarse_frequency shift */
+  // fftw_plan fftw_plan_dft_1d(int n, fftw_complex *in, fftw_complex *out, int sign, unsigned flags);
   fftw_plan p;
   p = fftw_plan_dft_1d(2048, &sdr->dab_frame[2656+505+sdr->fine_timeshift], sdr->symbols[0], FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(p);
   fftw_destroy_plan(p);
   
   fftw_complex tmp;
+  // swap upper and lower blocks
+  // (fft trick where 2n real inputs are transformed as n complex ones)
     for (i = 0; i < 2048/2; i++)
     {
+      // swap sdr->symbols[0][i] and sdr->symbols[0][2048/2 + i]
       tmp[0]     = sdr->symbols[0][i][0];
       tmp[1]     = sdr->symbols[0][i][1];
       sdr->symbols[0][i][0]    = sdr->symbols[0][i+2048/2][0];
@@ -102,15 +112,21 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
       sdr->symbols[0][i+2048/2][0] = tmp[0];
       sdr->symbols[0][i+2048/2][1] = tmp[1];
     }
-  sdr->coarse_freq_shift = dab_coarse_freq_sync_2(sdr->symbols[0]);
-  if (abs(sdr->coarse_freq_shift)>1) {
+  int32_t coarse_freq_shift = dab_coarse_freq_sync_2(sdr->symbols[0]);
+  if (abs(coarse_freq_shift)>1) {
+    // note: don't do the coarse shift immediately it tends to irreversbly run away with the frequency
+    // this is handled in demod_thread_fn
+    sdr->coarse_freq_shift = coarse_freq_shift;
     sdr->force_timesync = 1;
+    //fprintf(stderr, "   coarse freq shift, also force timeshift %d\n", sdr->coarse_freq_shift);
+    // (even if req shift not applied immediately) return anyway to do the forced time sync
     return 0;
   }
 
   /* fine freq correction */
   sdr->fine_freq_shift = dab_fine_freq_corr(sdr->dab_frame,sdr->fine_timeshift);
 
+  // see https://en.wikipedia.org/wiki/Phase-shift_keying  (differential quad)
   /* d-qpsk */
   for (i=0;i<76;i++) {
     p = fftw_plan_dft_1d(2048, &sdr->dab_frame[2656+(2552*i)+504],
@@ -161,17 +177,18 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     dst += 3072;
   }
   
+  //fprintf(stderr, "   ok\n");
   return 1;
 }
 
 void sdr_init(struct sdr_state_t *sdr)
 {
   // circular buffer init
-  cbInit(&(sdr->fifo),(196608*2*4)); // 4 frames
+  cbInit(&(sdr->fifo),(DAB_T_FRAME*2*4)); // 4 frames // FIXME: sizeof??
   // malloc of various buffers
   sdr->coarse_timeshift = 0;
   sdr->fine_timeshift=0;
-  sdr->dab_frame = ( fftw_complex* ) fftw_malloc( sizeof( fftw_complex ) * 196608 );
+  sdr->dab_frame = ( fftw_complex* ) fftw_malloc( sizeof( fftw_complex ) * DAB_T_FRAME );
   sdr->prs_ifft =( fftw_complex*) fftw_malloc(sizeof(fftw_complex) * (2048 + 32));
   sdr->prs_conj_ifft = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * (2048 + 32));
   sdr->prs_syms = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * (2048 + 32));

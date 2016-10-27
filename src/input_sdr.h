@@ -5,6 +5,7 @@
 #include <fftw3.h>
 
 #include "sdr_fifo.h"
+#include "dab_constants.h"
 
 #define DEFAULT_BUF_LENGTH (16 * 16384)
 #define GAIN_SETTLE_TIME 0
@@ -13,15 +14,15 @@ struct sdr_state_t {
   uint32_t frequency;
   uint8_t input_buffer[DEFAULT_BUF_LENGTH];
   int input_buffer_len;
-  uint8_t buffer[196608*2];
+  uint8_t buffer[DAB_T_FRAME*2];
   int32_t coarse_timeshift;
   int32_t fine_timeshift;
   int32_t coarse_freq_shift;
   double fine_freq_shift;
   CircularBuffer fifo;
-  int8_t real[196608];
-  int8_t imag[196608];
-  float filt[196608-2662];
+  int8_t real[DAB_T_FRAME];
+  int8_t imag[DAB_T_FRAME];
+  float filt[DAB_T_FRAME-2662];
   fftw_complex * dab_frame;
   fftw_complex * prs_ifft;
   fftw_complex * prs_conj_ifft;

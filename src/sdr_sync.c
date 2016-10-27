@@ -20,8 +20,8 @@ david.may.muc@googlemail.com
 */
 
 #include "sdr_sync.h"
-
 #include "sdr_prstab.c"
+#include "dab_constants.h"
 
 #define dbg 0
 
@@ -31,6 +31,12 @@ float mag_squared(fftw_complex sample) {
     return x * x + y *y;
 }
 
+
+// see also (maybe?) https://en.wikipedia.org/wiki/Guard_interval
+// real: real part
+// filt: temporary buffer to do work
+// force_timesync: boolean, timesync is done anyway; (why? where to?)
+// ret: amount (bytes?) of shift; should be multiple of 20
 uint32_t dab_coarse_time_sync(int8_t * real, float * filt, uint8_t force_timesync) {
   int32_t tnull = 2656; // was 2662? why?
   int32_t j,k;
@@ -40,6 +46,7 @@ uint32_t dab_coarse_time_sync(int8_t * real, float * filt, uint8_t force_timesyn
   float threshold=5000;
   for (k=0;k<tnull;k+=10)
     e = e +(float) abs(real[k]);
+  //fprintf(stderr, "Energy over nullsymbol: %f\n", e);
 #if dbg
   fprintf(stderr,"Energy over nullsymbol: %f\n",e);
 #endif
@@ -48,28 +55,34 @@ uint32_t dab_coarse_time_sync(int8_t * real, float * filt, uint8_t force_timesyn
   //fprintf(stderr,"Resync\n");
   // energy was to high so we assume we are not in sync
   // subsampled filter to detect where the null symbol is
-  for (j=0;j<(196608-tnull)/10;j++)
+  for (j=0; j<(DAB_T_FRAME-tnull)/10; j++)
     filt[j] = 0;
-  for (j=0;j<196608-tnull;j+=10)
+  for (j=0; j<DAB_T_FRAME-tnull; j+=10)
     for (k=0;k<tnull;k+=10)
       filt[j/10] = filt[j/10] +(float) abs(real[j+k]);
 
   // finding the minimum in filtered data gives position of null symbol
   float minVal=9999999;
+  float maxVal=0.0;//
   uint32_t minPos=0;
-  for (j=0;j<(196608-tnull)/10;j++){
+  for (j=0;j<(DAB_T_FRAME-tnull)/10;j++){
     if (filt[j]<minVal) {
       minVal = filt[j];
       minPos = j*10;
     }
+    // debug
+    if (filt[j]>maxVal) {
+      maxVal = filt[j];
+    }
   }
+  fprintf(stderr, "minVal %7.2f, maxVal %7.2f, minPos*2 %4d\n", minVal, maxVal, minPos*2);
+
   //fprintf(stderr,"calculated position of nullsymbol: %f",minPos*2);
   return minPos*2;
 }
 
 
 int32_t dab_fine_time_sync(fftw_complex * frame){
-
   /* correlation in frequency domain 
      e.g. J.Cho "PC-based receiver for Eureka-147" 2001
      e.g. K.Taura "A DAB receiver" 1996
@@ -84,8 +97,6 @@ int32_t dab_fine_time_sync(fftw_complex * frame){
   }
   fclose(fh0);
 #endif
-
-
 
   /* first we have to transfer the receive prs symbol in frequency domain */
   fftw_complex prs_received_fft[2048];
@@ -187,8 +198,6 @@ int32_t dab_fine_time_sync(fftw_complex * frame){
       maxVal = tempVal;
     }
   }
-  
-
 
 #if dbg
   fprintf(stderr,"Fine time shift: %d\n",maxPos);
@@ -202,6 +211,10 @@ int32_t dab_fine_time_sync(fftw_complex * frame){
 }
 
 
+
+
+
+// return -14..14 freq shift in kHz
 int32_t dab_coarse_freq_sync_2(fftw_complex * symbols){
   int len = 128;
   fftw_complex convoluted_prs[len];
@@ -212,6 +225,10 @@ int32_t dab_coarse_freq_sync_2(fftw_complex * symbols){
   int global_max_pos=0; 
   for (k=-freq_hub;k<=freq_hub;k++) {
     
+    // complex element-wise product over len symbol-frequencies with offset 256
+    // against some static frequency pattern (sdr_prstab.c, the subband-structure?)
+    // (->gives convolution when fft-ed again)
+    // freq_hub+k goes 0..2*freq_hub
     for (s=0;s<len;s++) {
       convoluted_prs[s][0] = prs_static[freq_hub+s][0]*symbols[freq_hub+k+256+s][0]-
 	(-1)*prs_static[freq_hub+s][1]*symbols[freq_hub+k+256+s][1];
@@ -235,13 +252,16 @@ int32_t dab_coarse_freq_sync_2(fftw_complex * symbols){
     fclose(fh0);
 #endif
     
-    uint32_t maxPos=0;
+    // uint32_t maxPos=0;
     float tempVal = 0;
     float maxVal=-99999;
     for (s=0;s<len;s++) {
+      // complex abs value
       tempVal = sqrt((convoluted_prs_time[s][0]*convoluted_prs_time[s][0])+(convoluted_prs_time[s][1]*convoluted_prs_time[s][1]));
+      // maxpos is the *time*-shift where correlation is best
+      // also, it is not used :-)
       if (tempVal>maxVal) {
-	maxPos = s;
+	// maxPos = s;
 	maxVal = tempVal;
       }
     }
@@ -256,9 +276,12 @@ int32_t dab_coarse_freq_sync_2(fftw_complex * symbols){
   //fprintf(stderr,"MAXPOS %d\n",global_max_pos);
   return global_max_pos;
 }
+
+
+// see (guess) https://en.wikipedia.org/wiki/Cyclic_prefix
 double dab_fine_freq_corr(fftw_complex * dab_frame,int32_t fine_timeshift){
-  fftw_complex *left;
-  fftw_complex *right;
+  fftw_complex *left; // = early in time
+  fftw_complex *right; // = arrived somewhat later
   fftw_complex *lr;
   double angle[504];
   double mean=0;
@@ -267,13 +290,14 @@ double dab_fine_freq_corr(fftw_complex * dab_frame,int32_t fine_timeshift){
   right = fftw_malloc(sizeof(fftw_complex) * 504);
   lr = fftw_malloc(sizeof(fftw_complex) * 504);
   uint32_t i;
-  fine_timeshift = 0;
+  fine_timeshift = 0;  // TODO why are we overriding a value argument???
   for (i=0;i<504;i++) {
     left[i][0] = dab_frame[2656+2048+i+fine_timeshift][0];
     left[i][1] = dab_frame[2656+2048+i+fine_timeshift][1];
     right[i][0] = dab_frame[2656+i+fine_timeshift][0];
     right[i][1] = dab_frame[2656+i+fine_timeshift][1];
   }
+  // (complex) element-wise product; phase of lr is sum of phases
   for (i=0;i<504;i++){
     lr[i][0] = (left[i][0]*right[i][0]-left[i][1]*(-1)*right[i][1]);
     lr[i][1] = (left[i][0]*(-1)*right[i][1]+left[i][1]*right[i][0]);

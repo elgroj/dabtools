@@ -37,20 +37,33 @@ void dab_process_frame(struct dab_state_t *dab)
   int i;
 
   fic_decode(dab, &dab->tfs[dab->tfidx]);
-  if (dab->tfs[dab->tfidx].fibs.ok_count > 0) {
-    //fprintf(stderr,"Decoded FIBs - ok_count=%d\n",dab->tfs[dab->tfidx].fibs.ok_count);
+  int fibOkCount = dab->tfs[dab->tfidx].fibs.ok_count;
+  if (fibOkCount > 0) {
+    //fprintf(stderr,"Decoded FIBs - ok_count=%d\n",fibOkCount);
     fib_decode(&dab->tf_info,&dab->tfs[dab->tfidx].fibs,12);
     //dump_tf_info(&dab->tf_info);
   }
-
-  if (dab->tfs[dab->tfidx].fibs.ok_count == 12) {
+  
+  if (fibOkCount == 12) {
     dab->okcount++;
-    if ((dab->okcount >= 10) && (!dab->locked)) { // 10 successive 100% perfect sets of FICs, we are locked.
-      dab->locked = 1;
-      //fprintf(stderr,"Locked with center-frequency %dHz\n",sdr->frequency);
-      fprintf(stderr,"Locked\n");
+    if (dab->okcount >= 10) {  // 10 successive 100% perfect sets of FICs, we are locked.
+      if (!dab->locked) {
+	dab->locked = 1;
+	//fprintf(stderr,"Locked with center-frequency %dHz\n",sdr->frequency);
+	fprintf(stderr,"Locked\n");
+      }
+      else {
+	// good but not yet locked
+	fprintf(stderr, "(%d:%d) ", fibOkCount, dab->okcount);
+      }
     }
   } else {
+    if (fibOkCount > 0) {
+      fprintf(stderr, "(%d) ", fibOkCount);
+    }
+    else {
+      fprintf(stderr, "_");
+    }
     dab->okcount = 0;
     if (dab->locked) {
       dab->locked = 0;
