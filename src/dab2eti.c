@@ -130,7 +130,7 @@ static void *demod_thread_fn(void *arg)
       int shift = coarse_freq_shift_clamped;
       // int shift = coarse_freq_shift_clamped / 2; // not really better
 
-      sdr->frequency = sdr->frequency += 1000*shift;
+      sdr->frequency += 1000*shift;
       // make next shift easier: (doesn't work so good, see above)
       prev_coarse_freq_shift -= shift;
       coarse_freq_shift_run_length-=2;

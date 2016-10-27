@@ -34,7 +34,7 @@ static void wf_demap_symbol(uint8_t* dst, uint8_t* src)
 
       /* Frequency deinterleaving and qpsk demapping combined */
       dst[qq] = (k >> (j--)) & 1;
-      dst[qq+1536] = (k >> j) & 1;
+      dst[qq+DAB_CARRIERS] = (k >> j) & 1;
     }
   }
 }
@@ -105,7 +105,7 @@ int wf_read_frame(struct wavefinder_t* wf, struct demapped_transmission_frame_t 
       } else if (symbol <= 4) { /* Symbols 2, 3 and 4 are FIC symbols */
         wf_demap_symbol(tf->fic_symbols_demapped[symbol-2], buf+12);
 	wf->fic_read[symbol-2] = 1;
-      } else if (symbol <= 76) { /* Symbols 5 to 76 are MSC symbols */
+      } else if (symbol <= DAB_SYMBOLS_IN_FRAME) { /* Symbols 5 to 76 are MSC symbols */
         tf->msc_filter[symbol-5] = 1;
 	wf->msc_read[symbol-5] = 1;
 	wf_demap_symbol(tf->msc_symbols_demapped[symbol-5], buf+12);

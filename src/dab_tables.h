@@ -2,6 +2,7 @@
 #define _DAB_TABLES_H
 
 #include <stdint.h>
+#include "dab_constants.h"
 
 struct uepprof {
   unsigned int bitrate;
@@ -27,7 +28,7 @@ extern const struct eepprof eeptable[];
 extern const struct eepprof eep2a8kbps;
 extern const char pvec[][32];
 
-extern const uint16_t rev_freq_deint_tab[1536];
+extern const uint16_t rev_freq_deint_tab[DAB_CARRIERS];
 
 #endif
 

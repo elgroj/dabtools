@@ -13,15 +13,15 @@ void cbInit(CircularBuffer *cb, uint32_t size) {
 }
 void cbFree(CircularBuffer *cb) {
     free(cb->elems);
-	}
+}
 
 int cbIsFull(CircularBuffer *cb) {
     return cb->count == cb->size; 
-	}
+}
  
 int cbIsEmpty(CircularBuffer *cb) {
     return cb->count == 0;
-	 }
+}
  
 void cbWrite(CircularBuffer *cb, uint8_t *elem) {
     uint32_t end = (cb->start + cb->count) % cb->size;

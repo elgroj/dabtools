@@ -22,13 +22,15 @@ struct sdr_state_t {
   CircularBuffer fifo;
   int8_t real[DAB_T_FRAME];
   int8_t imag[DAB_T_FRAME];
-  float filt[DAB_T_FRAME-2662];
-  fftw_complex * dab_frame;
-  fftw_complex * prs_ifft;
-  fftw_complex * prs_conj_ifft;
-  fftw_complex * prs_syms;
+  // was float filt[DAB_T_FRAME-2662];
+  float filt[(DAB_T_FRAME-DAB_T_NULL)/10];
+  fftw_complex dab_frame[DAB_T_FRAME];
+  // not used
+  // fftw_complex * prs_ifft;
+  // fftw_complex * prs_conj_ifft;
+  // fftw_complex * prs_syms;
   /* raw symbols */
-  fftw_complex symbols[76][2048];
+  fftw_complex symbols[DAB_SYMBOLS_IN_FRAME][DAB_T_CS];
   /* symbols d-qpsk-ed */
   fftw_complex * symbols_d;
 

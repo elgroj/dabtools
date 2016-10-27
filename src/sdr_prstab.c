@@ -1,4 +1,6 @@
-fftw_complex prs_static[1536] = {
+#include "dab_constants.h"
+
+fftw_complex prs_static[DAB_CARRIERS] = {
 {0, 1},
 {0, -1},
 {0, 1},

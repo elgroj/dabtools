@@ -132,36 +132,36 @@ static int init_freq_deint_tab()
 {
   int i,k;
   int n;
-  int KI[2048];
+  int KI[DAB_T_CS];
 
   KI[0] = 0;
-  for (i=1; i<2048; i++)
+  for (i=1; i<DAB_T_CS; i++)
     {
       KI[i] = (13 * KI[i-1] + 511) % 2048;
     }
 
   n = 0;
-  for (i=0; i<2048; i++)
+  for (i=0; i<DAB_T_CS; i++)
     {
       if ((KI[i]>=256) && (KI[i] <= 1792) && (KI[i]!= 1024))
 	{
 	  k = KI[i] - 1024;
-          if (k < 0) k = 1536/2 + k;
-          else if (k > 0) k = 1536/2 + k - 1;
+          if (k < 0) k = DAB_CARRIERS/2 + k;
+          else if (k > 0) k = DAB_CARRIERS/2 + k - 1;
 	  
           freq_deint_tab[n] = k;
 	  n++;
 	}
     }
 
-  for (i=0;i<1536;i++) {
+  for (i=0; i<DAB_CARRIERS; i++) {
     rev_freq_deint_tab[freq_deint_tab[i]] = i;
   }
   return 0;
 }
 #endif
 
-const uint16_t rev_freq_deint_tab[1536] = {
+const uint16_t rev_freq_deint_tab[DAB_CARRIERS] = {
   972, 1260, 1417,  367, 1370, 1214, 1024,   95,
   568, 1116,  184,  572,   85,  978,  475,  202,
  1503,  790,  319,  577,  170,  548, 1274,  106,

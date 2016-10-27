@@ -38,14 +38,15 @@ float mag_squared(fftw_complex sample) {
 // force_timesync: boolean, timesync is done anyway; (why? where to?)
 // ret: amount (bytes?) of shift; should be multiple of 20
 uint32_t dab_coarse_time_sync(int8_t * real, float * filt, uint8_t force_timesync) {
-  int32_t tnull = 2656; // was 2662? why?
+  int32_t tnull = DAB_T_NULL; // was 2662? why?   (2656)
   int32_t j,k;
 
   // check for energy in fist tnull samples
   float e=0;
   float threshold=5000;
-  for (k=0;k<tnull;k+=10)
-    e = e +(float) abs(real[k]);
+  for (k=0; k<tnull; k+=10) {
+    e += (float) abs(real[k]);
+  }
   //fprintf(stderr, "Energy over nullsymbol: %f\n", e);
 #if dbg
   fprintf(stderr,"Energy over nullsymbol: %f\n",e);
@@ -59,13 +60,13 @@ uint32_t dab_coarse_time_sync(int8_t * real, float * filt, uint8_t force_timesyn
     filt[j] = 0;
   for (j=0; j<DAB_T_FRAME-tnull; j+=10)
     for (k=0;k<tnull;k+=10)
-      filt[j/10] = filt[j/10] +(float) abs(real[j+k]);
+      filt[j/10] += (float) abs(real[j+k]);
 
   // finding the minimum in filtered data gives position of null symbol
   float minVal=9999999;
   float maxVal=0.0;//
   uint32_t minPos=0;
-  for (j=0;j<(DAB_T_FRAME-tnull)/10;j++){
+  for (j=0; j<(DAB_T_FRAME-tnull)/10; j++) {
     if (filt[j]<minVal) {
       minVal = filt[j];
       minPos = j*10;
@@ -87,44 +88,45 @@ int32_t dab_fine_time_sync(fftw_complex * frame){
      e.g. J.Cho "PC-based receiver for Eureka-147" 2001
      e.g. K.Taura "A DAB receiver" 1996
   */
-  int k;
 #if dbg
+  int k;
   FILE *fh0;
   fh0 = fopen("prs_received.dat","w+");
-  for(k=0;k<2552;k++) {
-    fprintf(fh0,"%f\n",(frame[2656+k][0]));
-    fprintf(fh0,"%f\n",(frame[2656+k][1]));
+  for(k=0; k<DAB_T_SYM; k++) {
+    fprintf(fh0,"%f\n",(frame[DAB_T_NULL+k][0]));
+    fprintf(fh0,"%f\n",(frame[DAB_T_NULL+k][1]));
   }
   fclose(fh0);
 #endif
 
   /* first we have to transfer the receive prs symbol in frequency domain */
-  fftw_complex prs_received_fft[2048];
+  fftw_complex prs_received_fft[DAB_T_CS];
   fftw_plan p;
-  p = fftw_plan_dft_1d(2048, &frame[2656+504], &prs_received_fft[0], FFTW_FORWARD, FFTW_ESTIMATE);
+  p = fftw_plan_dft_1d(DAB_T_CS, &frame[DAB_T_NULL+DAB_T_GUARD], &prs_received_fft[0], 
+		       FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(p);
   fftw_destroy_plan(p);
 #if dbg
   FILE *fh1;
   fh1 = fopen("prs_received_fft.dat","w+");
-  for(k=0;k<2048;k++) {
+  for(k=0; k<DAB_T_CS; k++) {
     fprintf(fh1,"%f\n",(prs_received_fft[k][0]));
     fprintf(fh1,"%f\n",(prs_received_fft[k][1]));
   }
   fclose(fh1);
 #endif
   /* now we build the complex conjugate of the known prs */
-  // 1536 as only the carries are used
-  fftw_complex prs_star[1536];
+  // 1536 as only the carries are used = DAB_CARRIERS
+  fftw_complex prs_star[DAB_CARRIERS];
   int i;
-  for (i=0;i<1536;i++) {
+  for (i=0; i<DAB_CARRIERS; i++) {
     prs_star[i][0] = prs_static[i][0];
     prs_star[i][1] = -1 *  prs_static[i][1];
   }
 #if dbg
   FILE *fh2;
   fh2 = fopen("prs_star.dat","w+");
-  for(k=0;k<1536;k++) {
+  for(k=0; k<DAB_CARRIERS; k++) {
     fprintf(fh2,"%f\n",(prs_star[k][0]));
     fprintf(fh2,"%f\n",(prs_star[k][1]));
   }
@@ -135,27 +137,27 @@ int32_t dab_fine_time_sync(fftw_complex * frame){
   /* fftshift the received prs
      at this point we have to be coarse frequency sync 
      however we can simply shift the bins */
-  fftw_complex prs_rec_shift[1536];
+  fftw_complex prs_rec_shift[DAB_CARRIERS];
   // TODO allow for coarse frequency shift !=0 
-  int32_t cf_shift = 0;
+  // int32_t cf_shift = 0;
   // matlab notation (!!!-1)
-  // 769:1536+s
+  // 769:1536+s   DAB_CARRIERS+s
   //  2:769+s why 2? I dont remember, but peak is very strong
-  for (i=0;i<1536;i++) {
-    if (i<768) {
+  int mid = DAB_CARRIERS/2; // 768
+  for (i=0; i<DAB_CARRIERS; i++) {
+    if (i < mid) {
       prs_rec_shift[i][0] = prs_received_fft[i+1280][0];
       prs_rec_shift[i][1] = prs_received_fft[i+1280][1];
     }
-    if (i>=768) {
+    else { // i>=768
       prs_rec_shift[i][0] = prs_received_fft[i-765][0];
       prs_rec_shift[i][1] = prs_received_fft[i-765][1];
-
     }
   }
 #if dbg
   FILE *fh3;
   fh3 = fopen("prs_rec_shift.dat","w+");
-  for(k=0;k<1536;k++) {
+  for(k=0; k<DAB_CARRIERS; k++) {
     fprintf(fh3,"%f\n",(prs_rec_shift[k][0]));
     fprintf(fh3,"%f\n",(prs_rec_shift[k][1]));
   }
@@ -165,23 +167,24 @@ int32_t dab_fine_time_sync(fftw_complex * frame){
 
   
   /* now we convolute both symbols */
-  fftw_complex convoluted_prs[1536];
+  fftw_complex convoluted_prs[DAB_CARRIERS];
   int s;
-  for (s=0;s<1536;s++) {
-    convoluted_prs[s][0] = prs_rec_shift[s][0]*prs_star[s][0]-prs_rec_shift[s][1]*prs_star[s][1];
-    convoluted_prs[s][1] = prs_rec_shift[s][0]*prs_star[s][1]+prs_rec_shift[s][1]*prs_star[s][0];
+  for (s=0; s<DAB_CARRIERS; s++) {
+    convoluted_prs[s][0] = prs_rec_shift[s][0]*prs_star[s][0] - prs_rec_shift[s][1]*prs_star[s][1];
+    convoluted_prs[s][1] = prs_rec_shift[s][0]*prs_star[s][1] + prs_rec_shift[s][1]*prs_star[s][0];
   }
 
   /* and finally we transfer the convolution back into time domain */
-  fftw_complex convoluted_prs_time[1536]; 
+  fftw_complex convoluted_prs_time[DAB_CARRIERS]; 
   fftw_plan px;
-  px = fftw_plan_dft_1d(1536, &convoluted_prs[0], &convoluted_prs_time[0], FFTW_BACKWARD, FFTW_ESTIMATE);
+  px = fftw_plan_dft_1d(DAB_CARRIERS, &convoluted_prs[0], &convoluted_prs_time[0], 
+			FFTW_BACKWARD, FFTW_ESTIMATE);
   fftw_execute(px);
   fftw_destroy_plan(px);
 #if dbg
   FILE *fh4;
   fh4 = fopen("convoluted_prs_time.dat","w+");
-  for(k=0;k<1536;k++) {
+  for(k=0; k<DAB_CARRIERS; k++) {
     fprintf(fh4,"%f\n",(convoluted_prs_time[k][0]));
     fprintf(fh4,"%f\n",(convoluted_prs_time[k][1]));
   }
@@ -191,8 +194,9 @@ int32_t dab_fine_time_sync(fftw_complex * frame){
   uint32_t maxPos=0;
   float tempVal = 0;
   float maxVal=-99999;
-  for (i=0;i<1536;i++) {
-    tempVal = sqrt((convoluted_prs_time[i][0]*convoluted_prs_time[i][0])+(convoluted_prs_time[i][1]*convoluted_prs_time[i][1]));
+  for (i=0; i<DAB_CARRIERS; i++) {
+    tempVal = sqrt((convoluted_prs_time[i][0]*convoluted_prs_time[i][0])
+		   + (convoluted_prs_time[i][1]*convoluted_prs_time[i][1]));
     if (tempVal>maxVal) {
       maxPos = i;
       maxVal = tempVal;
@@ -202,10 +206,10 @@ int32_t dab_fine_time_sync(fftw_complex * frame){
 #if dbg
   fprintf(stderr,"Fine time shift: %d\n",maxPos);
 #endif
-  if (maxPos<1536/2) {
+  if (maxPos<DAB_CARRIERS/2) {
     return maxPos*2+16;
   } else {
-    return ((maxPos-(1536))*2);
+    return ((maxPos-(DAB_CARRIERS))*2);
   }
   //return 0;
 }
@@ -283,33 +287,33 @@ double dab_fine_freq_corr(fftw_complex * dab_frame,int32_t fine_timeshift){
   fftw_complex *left; // = early in time
   fftw_complex *right; // = arrived somewhat later
   fftw_complex *lr;
-  double angle[504];
+  double angle[DAB_T_GUARD];
   double mean=0;
   double ffs;
-  left = fftw_malloc(sizeof(fftw_complex) * 504);
-  right = fftw_malloc(sizeof(fftw_complex) * 504);
-  lr = fftw_malloc(sizeof(fftw_complex) * 504);
+  left = fftw_malloc(sizeof(fftw_complex) * DAB_T_GUARD);
+  right = fftw_malloc(sizeof(fftw_complex) * DAB_T_GUARD);
+  lr = fftw_malloc(sizeof(fftw_complex) * DAB_T_GUARD);
   uint32_t i;
   fine_timeshift = 0;  // TODO why are we overriding a value argument???
-  for (i=0;i<504;i++) {
-    left[i][0] = dab_frame[2656+2048+i+fine_timeshift][0];
-    left[i][1] = dab_frame[2656+2048+i+fine_timeshift][1];
-    right[i][0] = dab_frame[2656+i+fine_timeshift][0];
-    right[i][1] = dab_frame[2656+i+fine_timeshift][1];
+  for (i=0; i<DAB_T_GUARD; i++) {
+    left[i][0]  = dab_frame[DAB_T_NULL+DAB_T_CS+i+fine_timeshift][0];
+    left[i][1]  = dab_frame[DAB_T_NULL+DAB_T_CS+i+fine_timeshift][1];
+    right[i][0] = dab_frame[DAB_T_NULL         +i+fine_timeshift][0];
+    right[i][1] = dab_frame[DAB_T_NULL         +i+fine_timeshift][1];
   }
   // (complex) element-wise product; phase of lr is sum of phases
-  for (i=0;i<504;i++){
-    lr[i][0] = (left[i][0]*right[i][0]-left[i][1]*(-1)*right[i][1]);
-    lr[i][1] = (left[i][0]*(-1)*right[i][1]+left[i][1]*right[i][0]);
+  for (i=0; i<DAB_T_GUARD; i++) {
+    lr[i][0] = left[i][0]*right[i][0] - left[i][1]*(-1)*right[i][1];
+    lr[i][1] = left[i][0]*(-1)*right[i][1] + left[i][1]*right[i][0];
   }
   
-  for (i=0;i<504;i++){
+  for (i=0; i<DAB_T_GUARD; i++) {
    angle[i] = atan2(lr[i][1],lr[i][0]);
   }
-  for (i=0;i<504;i++){
+  for (i=0; i<DAB_T_GUARD; i++) {
     mean = mean + angle[i];
   }
-  mean = (mean/504);
+  mean = (mean/DAB_T_GUARD);
   //printf("\n%f %f\n",left[0][0],left[0][1]);
   //printf("\n%f %f\n",right[0][0],right[0][1]);
   //printf("\n%f %f\n",lr[0][0],lr[0][1]);
