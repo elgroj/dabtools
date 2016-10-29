@@ -42,6 +42,12 @@ void swap_blocks(int len, fftw_complex* sym)
 }
 
 
+void dqpsk_step(fftw_complex a, fftw_complex b, fftw_complex *out) 
+{
+  double magsqb = b[0]*b[0] + b[1]*b[1];
+  (*out)[0] = (a[0]*b[0] + a[1]*b[1]) / magsqb;
+  (*out)[1] = (a[0]*b[1] - a[1]*b[0]) / magsqb;
+}
 
 int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr) {
   int i,j;
@@ -118,7 +124,7 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
   fftw_plan p;
   // FIXME why 505=DAB_T_GUARD+1 ??
   p = fftw_plan_dft_1d(DAB_T_CS, 
-		       &sdr->dab_frame[DAB_T_NULL+DAB_T_GUARD+1+sdr->fine_timeshift], 
+		       &sdr->dab_frame[DAB_T_NULL + DAB_T_GUARD+1 + sdr->fine_timeshift], 
 		       sdr->symbols[0], 
 		       FFTW_FORWARD, 
 		       FFTW_ESTIMATE);
@@ -142,29 +148,23 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
 
   // see https://en.wikipedia.org/wiki/Phase-shift_keying  (differential quad)
   /* d-qpsk */
-  // processing i=0 (again) is needed; why??
+  // TODO: processing i=0 (again) is needed; why??
+  // TODO: what about fine_timeshift here?
   for (i=0; i<DAB_SYMBOLS_IN_FRAME; i++) {
-    p = fftw_plan_dft_1d(DAB_T_CS, &sdr->dab_frame[DAB_T_NULL+(DAB_T_SYM*i)+DAB_T_GUARD],
-			 sdr->symbols[i], FFTW_FORWARD, FFTW_ESTIMATE);
+    p = fftw_plan_dft_1d(DAB_T_CS, 
+			 &sdr->dab_frame[DAB_T_NULL + (DAB_T_SYM*i) + DAB_T_GUARD],
+			 sdr->symbols[i], 
+			 FFTW_FORWARD,
+			 FFTW_ESTIMATE);
     fftw_execute(p);
     fftw_destroy_plan(p);
     swap_blocks(DAB_T_CS, sdr->symbols[i]);
   }
 
   for (j=1; j<DAB_SYMBOLS_IN_FRAME; j++) {
-    for (i=0;i<DAB_T_CS;i++)
-      {
-	sdr->symbols_d[j*DAB_T_CS+i][0] =
-	  (sdr->symbols[j][i][0]*sdr->symbols[j-1][i][0]
-	   + sdr->symbols[j][i][1]*sdr->symbols[j-1][i][1])
-	  / (sdr->symbols[j-1][i][0]*sdr->symbols[j-1][i][0]
-	     + sdr->symbols[j-1][i][1]*sdr->symbols[j-1][i][1]);
-	sdr->symbols_d[j*DAB_T_CS+i][1] = 
-	  ((sdr->symbols[j][i][0]*sdr->symbols[j-1][i][1])
-	   - (sdr->symbols[j][i][1]*sdr->symbols[j-1][i][0]))
-	  / (sdr->symbols[j-1][i][0]*sdr->symbols[j-1][i][0]
-	     + sdr->symbols[j-1][i][1]*sdr->symbols[j-1][i][1]);
-      }
+    for (i=0; i<DAB_T_CS; i++) {
+      dqpsk_step(sdr->symbols[j][i], sdr->symbols[j-1][i], &sdr->symbols_d[j*DAB_T_CS + i]);
+    }
   }
   
   uint8_t* dst = tf->fic_symbols_demapped[0];
