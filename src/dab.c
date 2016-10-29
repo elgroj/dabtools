@@ -53,16 +53,20 @@ void dab_process_frame(struct dab_state_t *dab)
 	fprintf(stderr,"Locked\n");
       }
       else {
-	// good but not yet locked
-	fprintf(stderr, "(%d:%d) ", fibOkCount, dab->okcount);
+	// already locked
+	fprintf(stderr, "[%2d:%2d] ", fibOkCount, dab->okcount);
       }
+    }
+    else {
+      // good but not yet locked
+      fprintf(stderr, "(%2d:%2d) ", fibOkCount, dab->okcount);
     }
   } else {
     if (fibOkCount > 0) {
-      fprintf(stderr, "(%d) ", fibOkCount);
+      fprintf(stderr, "(%5d) ", fibOkCount);
     }
     else {
-      fprintf(stderr, "_");
+      fprintf(stderr, "      _ ");
     }
     dab->okcount = 0;
     if (dab->locked) {
