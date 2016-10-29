@@ -26,6 +26,23 @@ david.may.muc@googlemail.com
 #include "input_sdr.h"
 #include "sdr_sync.h"
 
+
+void swap_blocks(int len, fftw_complex* sym) 
+{
+  fftw_complex tmp;
+  int i;
+  for (i = 0; i < len/2; i++) {
+    tmp[0] = sym[i][0];
+    tmp[1] = sym[i][1];
+    sym[i][0] = sym[i + len/2][0];
+    sym[i][1] = sym[i + len/2][1];
+    sym[i + len/2][0] = tmp[0];
+    sym[i + len/2][1] = tmp[1];
+  }
+}
+
+
+
 int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr) {
   int i,j;
 
@@ -44,16 +61,21 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     cbWrite(&(sdr->fifo),&sdr->input_buffer[i]);
   }
 
+  // timeshifts in bytes
+  int offset = sdr->coarse_timeshift + sdr->fine_timeshift;
+
   /* Check for data in fifo */
-  if (sdr->fifo.count < DAB_T_FRAME * 3) {
+  if ((int)sdr->fifo.count < 2*DAB_T_FRAME + offset) {
     // fprintf(stderr, "   no data in fifo %d < %d\n", sdr->fifo.count, DAB_T_FRAME * 3);
     return 0;
   }
-  
-  /* read fifo */
-  int tts = sdr->coarse_timeshift + sdr->fine_timeshift;
-  sdr_read_fifo(&(sdr->fifo), DAB_T_FRAME * 2, tts, sdr->buffer);
 
+  fprintf(stderr, "offset: %6d; cts: %6d fts: %6d\n",
+  	  offset, sdr->coarse_timeshift, sdr->fine_timeshift);
+  
+  /* read fifo, 2 reads (Q/I) per sample */
+  sdr_read_fifo(&(sdr->fifo), 2*DAB_T_FRAME, offset, sdr->buffer);
+  sdr->fine_timeshift = 0; // time shift was part of offset
 
   
   /* give the AGC some time to settle */
@@ -63,25 +85,20 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     fprintf(stderr, "   startup_delay=%i\n",sdr->startup_delay);
     return 0;
   }
-  
 
 
-  /* complex data conversion */
+  /* complex data conversion (also unsigned byte to signed) ; aka I/Q-samples */
   for (j=0; j<DAB_T_FRAME*2; j+=2) {
-    sdr->real[j/2] = sdr->buffer[j]-127;
-    sdr->imag[j/2] = sdr->buffer[j+1]-127;
+    sdr->real[j/2] = sdr->buffer[j] - 127; // = SCHAR_MAX
+    sdr->imag[j/2] = sdr->buffer[j+1] - 127;
   }
-
-  // unnecessary, it will be assigned afterwards
-  /* /\* resetting coarse timeshift *\/ */
-  /* sdr->coarse_timeshift = 0; */
 
   /* coarse time sync */
   /* performance bottleneck atm */
   sdr->coarse_timeshift = dab_coarse_time_sync(sdr->real,sdr->filt,sdr->force_timesync);
   // we are not in sync so -> next frame
   sdr->force_timesync=0;
-  if (sdr->coarse_timeshift) {
+  if (sdr->coarse_timeshift != 0) {
     //fprintf(stderr, "   coarse time shift %d\n", sdr->coarse_timeshift);
     return 0;
   }
@@ -94,9 +111,8 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
 
   /* fine time sync */
   sdr->fine_timeshift = dab_fine_time_sync(sdr->dab_frame);
-  if (sdr->coarse_freq_shift) { // TODO value is reset to 0 earlier in this function
-    sdr->fine_timeshift = 0;
-    }
+
+
   /* coarse_frequency shift */
   // fftw_plan fftw_plan_dft_1d(int n, fftw_complex *in, fftw_complex *out, int sign, unsigned flags);
   fftw_plan p;
@@ -108,19 +124,8 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
 		       FFTW_ESTIMATE);
   fftw_execute(p);
   fftw_destroy_plan(p);
-  
-  fftw_complex tmp;
-  // swap upper and lower blocks
-  // (fft trick where 2n real inputs are transformed as n complex ones)
-  for (i = 0; i < DAB_T_CS/2; i++) {
-    // swap sdr->symbols[0][i] and sdr->symbols[0][DAB_T_CS/2 + i]
-    tmp[0]     = sdr->symbols[0][i][0];
-    tmp[1]     = sdr->symbols[0][i][1];
-    sdr->symbols[0][i][0]    = sdr->symbols[0][i+DAB_T_CS/2][0];
-    sdr->symbols[0][i][1]    = sdr->symbols[0][i+DAB_T_CS/2][1];
-    sdr->symbols[0][i+DAB_T_CS/2][0] = tmp[0];
-    sdr->symbols[0][i+DAB_T_CS/2][1] = tmp[1];
-  }
+  swap_blocks(DAB_T_CS, sdr->symbols[0]); // swap upper and lower blocks (of the PRS)
+
   int32_t coarse_freq_shift = dab_coarse_freq_sync_2(sdr->symbols[0]);
   if (abs(coarse_freq_shift)>1) {
     // note: don't do the coarse shift immediately, it tends to irreversbly run away with the frequency
@@ -137,34 +142,28 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
 
   // see https://en.wikipedia.org/wiki/Phase-shift_keying  (differential quad)
   /* d-qpsk */
+  // processing i=0 (again) is needed; why??
   for (i=0; i<DAB_SYMBOLS_IN_FRAME; i++) {
     p = fftw_plan_dft_1d(DAB_T_CS, &sdr->dab_frame[DAB_T_NULL+(DAB_T_SYM*i)+DAB_T_GUARD],
 			 sdr->symbols[i], FFTW_FORWARD, FFTW_ESTIMATE);
     fftw_execute(p);
     fftw_destroy_plan(p);
-    for (j = 0; j < DAB_T_CS/2; j++)
-      {
-	tmp[0]     = sdr->symbols[i][j][0];
-	tmp[1]     = sdr->symbols[i][j][1];
-	sdr->symbols[i][j][0]    = sdr->symbols[i][j+DAB_T_CS/2][0];
-	sdr->symbols[i][j][1]    = sdr->symbols[i][j+DAB_T_CS/2][1];
-	sdr->symbols[i][j+DAB_T_CS/2][0] = tmp[0];
-	sdr->symbols[i][j+DAB_T_CS/2][1] = tmp[1];
-      }
-    
+    swap_blocks(DAB_T_CS, sdr->symbols[i]);
   }
-  //
+
   for (j=1; j<DAB_SYMBOLS_IN_FRAME; j++) {
     for (i=0;i<DAB_T_CS;i++)
       {
 	sdr->symbols_d[j*DAB_T_CS+i][0] =
-	  ((sdr->symbols[j][i][0]*sdr->symbols[j-1][i][0])
-	   +(sdr->symbols[j][i][1]*sdr->symbols[j-1][i][1]))
-	  /(sdr->symbols[j-1][i][0]*sdr->symbols[j-1][i][0]+sdr->symbols[j-1][i][1]*sdr->symbols[j-1][i][1]);
+	  (sdr->symbols[j][i][0]*sdr->symbols[j-1][i][0]
+	   + sdr->symbols[j][i][1]*sdr->symbols[j-1][i][1])
+	  / (sdr->symbols[j-1][i][0]*sdr->symbols[j-1][i][0]
+	     + sdr->symbols[j-1][i][1]*sdr->symbols[j-1][i][1]);
 	sdr->symbols_d[j*DAB_T_CS+i][1] = 
 	  ((sdr->symbols[j][i][0]*sdr->symbols[j-1][i][1])
-	   -(sdr->symbols[j][i][1]*sdr->symbols[j-1][i][0]))
-	  /(sdr->symbols[j-1][i][0]*sdr->symbols[j-1][i][0]+sdr->symbols[j-1][i][1]*sdr->symbols[j-1][i][1]);
+	   - (sdr->symbols[j][i][1]*sdr->symbols[j-1][i][0]))
+	  / (sdr->symbols[j-1][i][0]*sdr->symbols[j-1][i][0]
+	     + sdr->symbols[j-1][i][1]*sdr->symbols[j-1][i][1]);
       }
   }
   
@@ -176,19 +175,22 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     if (j == 4) { dst = tf->msc_symbols_demapped[0]; }
     k = 0;
     for (i=0; i<DAB_T_CS; i++) {
+      // FIXME magic numbers 255 1024(2048/2, also 0) 1793  // 1793 = 1536+255+2
       if ((i>255) && i!=1024 && i < 1793) {
         /* Frequency deinterleaving and QPSK demapping combined */  
         kk = rev_freq_deint_tab[k++];
-        dst[kk] = (sdr->symbols_d[j*DAB_T_CS+i][0]>0)?0:1;
-        dst[DAB_CARRIERS+kk] = (sdr->symbols_d[j*DAB_T_CS+i][1]>0)?1:0;
+        dst[kk]              = (sdr->symbols_d[j*DAB_T_CS+i][0] < 0);
+        dst[kk+DAB_CARRIERS] = (sdr->symbols_d[j*DAB_T_CS+i][1] > 0);
       }
     }
-    dst += 3072;
+    dst += 2*DAB_CARRIERS;  // 3072
   }
   
   //fprintf(stderr, "   ok\n");
   return 1;
 }
+
+
 
 void sdr_init(struct sdr_state_t *sdr)
 {
@@ -197,11 +199,6 @@ void sdr_init(struct sdr_state_t *sdr)
   // malloc of various buffers
   sdr->coarse_timeshift = 0;
   sdr->fine_timeshift=0;
-  // sdr->dab_frame = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * DAB_T_FRAME);
-  // not used
-  // sdr->prs_ifft = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * (2048 + 32));
-  // sdr->prs_conj_ifft = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * (2048 + 32));
-  // sdr->prs_syms = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * (2048 + 32));
 
   // malloc of various buffers
   sdr->symbols_d = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * DAB_T_CS * DAB_SYMBOLS_IN_FRAME);

@@ -10,6 +10,8 @@
 #define DEFAULT_BUF_LENGTH (16 * 16384)
 #define GAIN_SETTLE_TIME 0
 
+#define FILT_SAMPLING 10
+
 struct sdr_state_t {
   uint32_t frequency;
   uint8_t input_buffer[DEFAULT_BUF_LENGTH];
@@ -23,7 +25,7 @@ struct sdr_state_t {
   int8_t real[DAB_T_FRAME];
   int8_t imag[DAB_T_FRAME];
   // was float filt[DAB_T_FRAME-2662];
-  float filt[(DAB_T_FRAME-DAB_T_NULL)/10];
+  float filt[(DAB_T_FRAME-DAB_T_NULL)/FILT_SAMPLING];
   fftw_complex dab_frame[DAB_T_FRAME];
   // not used
   // fftw_complex * prs_ifft;
