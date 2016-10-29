@@ -161,7 +161,8 @@ static void *demod_thread_fn(void *arg)
     }
 
     if (abs(sdr->coarse_freq_shift)<1 && (abs(sdr->fine_freq_shift) > 50)) {
-      sdr->frequency = sdr->frequency + (sdr->fine_freq_shift/3);
+      // TODO: why /3? some hacky fix for 3 reads per frame or value smoothing?
+      sdr->frequency += sdr->fine_freq_shift/3;
       rtlsdr_set_center_freq(dev,sdr->frequency);
       fprintf(stderr,"                                          ffs : %f\n",sdr->fine_freq_shift);//
       sdr->fine_freq_shift = 0;  // joerg: otherwise this will wander away on every half-read frame
@@ -183,10 +184,8 @@ static void rtlsdr_callback(uint8_t *buf, uint32_t len, void *ctx)
 {
   struct sdr_state_t *sdr = ctx;
   int dr_val;
-  if (do_exit) {
-    return;}
-  if (!ctx) {
-    return;}
+  if (do_exit) { return; }
+  if (!ctx) { return; }
   memcpy(sdr->input_buffer,buf,len);
   sdr->input_buffer_len = len;
   sem_getvalue(&data_ready, &dr_val);
@@ -198,6 +197,7 @@ static void eti_callback(uint8_t* eti)
 {
   write(1, eti, 6144);
 }
+
 
 static int do_sdr_decode(struct dab_state_t* dab, int frequency, int gain)
 {
@@ -312,6 +312,7 @@ static int do_sdr_decode(struct dab_state_t* dab, int frequency, int gain)
   rtlsdr_close(dev);
   return 1;
 }
+
 
 static int do_wf_decode(struct dab_state_t* dab, int frequency)
 {
