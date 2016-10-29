@@ -122,9 +122,9 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
   /* coarse_frequency shift */
   // fftw_plan fftw_plan_dft_1d(int n, fftw_complex *in, fftw_complex *out, int sign, unsigned flags);
   fftw_plan p;
-  // FIXME why 505=DAB_T_GUARD+1 ??
+  // FIXME why 505=DAB_T_GUARD+1??
   p = fftw_plan_dft_1d(DAB_T_CS, 
-		       &sdr->dab_frame[DAB_T_NULL + DAB_T_GUARD+1 + sdr->fine_timeshift], 
+		       &sdr->dab_frame[DAB_T_NULL + DAB_T_GUARD/2], 
 		       sdr->symbols[0], 
 		       FFTW_FORWARD, 
 		       FFTW_ESTIMATE);
@@ -133,7 +133,7 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
   swap_blocks(DAB_T_CS, sdr->symbols[0]); // swap upper and lower blocks (of the PRS)
 
   int32_t coarse_freq_shift = dab_coarse_freq_sync_2(sdr->symbols[0]);
-  if (abs(coarse_freq_shift)>1) {
+  if (abs(coarse_freq_shift) > 1) {
     // note: don't do the coarse shift immediately, it tends to irreversbly run away with the frequency
     // this is handled in demod_thread_fn
     sdr->coarse_freq_shift = coarse_freq_shift;
@@ -144,15 +144,15 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
   }
 
   /* fine freq correction */
-  sdr->fine_freq_shift = dab_fine_freq_corr(sdr->dab_frame,sdr->fine_timeshift);
+  sdr->fine_freq_shift = dab_fine_freq_corr(sdr->dab_frame);
 
-  // see https://en.wikipedia.org/wiki/Phase-shift_keying  (differential quad)
   /* d-qpsk */
-  // TODO: processing i=0 (again) is needed; why??
-  // TODO: what about fine_timeshift here?
+  // see https://en.wikipedia.org/wiki/Phase-shift_keying  (differential quad)
+  // processing i=0 (again) is needed if usage (phase) of DAB_T_GUARD above
+  // is different from here, because that changes relative phase too much already!
   for (i=0; i<DAB_SYMBOLS_IN_FRAME; i++) {
     p = fftw_plan_dft_1d(DAB_T_CS, 
-			 &sdr->dab_frame[DAB_T_NULL + (DAB_T_SYM*i) + DAB_T_GUARD],
+			 &sdr->dab_frame[DAB_T_NULL + (DAB_T_SYM*i) + DAB_T_GUARD/2],
 			 sdr->symbols[i], 
 			 FFTW_FORWARD,
 			 FFTW_ESTIMATE);
@@ -160,7 +160,6 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     fftw_destroy_plan(p);
     swap_blocks(DAB_T_CS, sdr->symbols[i]);
   }
-
   for (j=1; j<DAB_SYMBOLS_IN_FRAME; j++) {
     for (i=0; i<DAB_T_CS; i++) {
       dqpsk_step(sdr->symbols[j][i], sdr->symbols[j-1][i], &sdr->symbols_d[j*DAB_T_CS + i]);
@@ -175,9 +174,9 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     if (j == 4) { dst = tf->msc_symbols_demapped[0]; }
     k = 0;
     for (i=0; i<DAB_T_CS; i++) {
-      // FIXME magic numbers 255 1024(2048/2, also 0) 1793  // 1793 = 1536+255+2
-      if ((i>255) && i!=1024 && i < 1793) {
-        /* Frequency deinterleaving and QPSK demapping combined */  
+      int empty_channels = DAB_T_CS/8;
+      // 256..1792
+      if (empty_channels <= i && i != DAB_T_CS/2 && i <= DAB_CARRIERS+empty_channels) {
         kk = rev_freq_deint_tab[k++];
         dst[kk]              = (sdr->symbols_d[j*DAB_T_CS+i][0] < 0);
         dst[kk+DAB_CARRIERS] = (sdr->symbols_d[j*DAB_T_CS+i][1] > 0);

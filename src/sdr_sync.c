@@ -229,7 +229,8 @@ int32_t dab_fine_time_sync(fftw_complex * frame)
 
 
 // return -14..14 freq shift in kHz
-int32_t dab_coarse_freq_sync_2(fftw_complex * symbols){
+int32_t dab_coarse_freq_sync_2(fftw_complex * symbols)
+{
   // FIXME: magic numbers here: 128, 14, also 256
   int len = 128;
   fftw_complex convoluted_prs[len];
@@ -288,7 +289,7 @@ int32_t dab_coarse_freq_sync_2(fftw_complex * symbols){
 
 // see (guess) https://en.wikipedia.org/wiki/Cyclic_prefix
 // ret: frequency shift in Hz
-double dab_fine_freq_corr(fftw_complex * dab_frame,int32_t fine_timeshift)
+double dab_fine_freq_corr(fftw_complex * dab_frame)
 {
   fftw_complex *left;
   fftw_complex *right;
@@ -301,13 +302,12 @@ double dab_fine_freq_corr(fftw_complex * dab_frame,int32_t fine_timeshift)
   right = fftw_malloc(sizeof(fftw_complex) * DAB_T_GUARD);
   lr = fftw_malloc(sizeof(fftw_complex) * DAB_T_GUARD);
   uint32_t i;
-  fine_timeshift = 0;  // TODO why are we overriding a value argument???
   for (i=0; i<DAB_T_GUARD; i++) {
     // fine_timeshift+DAB_T_NULL: we are looking at the Phase Reference Symbol
-    left[i][0]  = dab_frame[fine_timeshift+DAB_T_NULL+DAB_T_CS+i][0];
-    left[i][1]  = dab_frame[fine_timeshift+DAB_T_NULL+DAB_T_CS+i][1];
-    right[i][0] = dab_frame[fine_timeshift+DAB_T_NULL         +i][0];
-    right[i][1] = dab_frame[fine_timeshift+DAB_T_NULL         +i][1];
+    left[i][0]  = dab_frame[DAB_T_NULL+DAB_T_CS+i][0];
+    left[i][1]  = dab_frame[DAB_T_NULL+DAB_T_CS+i][1];
+    right[i][0] = dab_frame[DAB_T_NULL         +i][0];
+    right[i][1] = dab_frame[DAB_T_NULL         +i][1];
   }
 
   // the guard is cyclic, so we can calculate the phase shift between them

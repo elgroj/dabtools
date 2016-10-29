@@ -25,7 +25,7 @@ david.may.muc@googlemail.com
 #include <fftw3.h>
 #include <stdlib.h>
 
-uint32_t dab_coarse_time_sync(int8_t * real,float * filt,uint8_t force_timesync);
+uint32_t dab_coarse_time_sync(int8_t * real, float * filt, uint8_t force_timesync);
 int32_t dab_fine_time_sync(fftw_complex * frame);
 int32_t dab_coarse_freq_sync_2(fftw_complex * symbols);
-double dab_fine_freq_corr(fftw_complex * dab_frame,int32_t fine_timeshift);
+double dab_fine_freq_corr(fftw_complex * dab_frame);
