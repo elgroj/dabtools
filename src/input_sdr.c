@@ -174,9 +174,9 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     if (j == 4) { dst = tf->msc_symbols_demapped[0]; }
     k = 0;
     for (i=0; i<DAB_T_CS; i++) {
-      int empty_channels = DAB_T_CS/8;
+      int empty_channels = DAB_T_CS - DAB_CARRIERS;
       // 256..1792
-      if (empty_channels <= i && i != DAB_T_CS/2 && i <= DAB_CARRIERS+empty_channels) {
+      if (empty_channels/2 <= i && i != DAB_T_CS/2 && i <= DAB_CARRIERS+empty_channels/2) {
         kk = rev_freq_deint_tab[k++];
         dst[kk]              = (sdr->symbols_d[j*DAB_T_CS+i][0] < 0);
         dst[kk+DAB_CARRIERS] = (sdr->symbols_d[j*DAB_T_CS+i][1] > 0);
