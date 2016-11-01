@@ -10,7 +10,6 @@
 #define DEFAULT_BUF_LENGTH (16 * 16384)
 #define GAIN_SETTLE_TIME 0
 
-#define FILT_SAMPLING 10
 
 struct sdr_state_t {
   uint32_t frequency;
@@ -24,8 +23,7 @@ struct sdr_state_t {
   CircularBuffer fifo;
   int8_t real[DAB_T_FRAME];
   int8_t imag[DAB_T_FRAME];
-  // was float filt[DAB_T_FRAME-2662];
-  float filt[(DAB_T_FRAME-DAB_T_NULL)/FILT_SAMPLING];
+  // was float filt[DAB_T_FRAME-2662]; -> moved into dab_coarse_time_sync
   fftw_complex dab_frame[DAB_T_FRAME];
   // not used
   // fftw_complex * prs_ifft;
@@ -44,6 +42,11 @@ struct sdr_state_t {
   double p_e_prior_vitdec;
   double p_e_after_vitdec;
 };
+
+struct demapped_transmission_frame_t;
+
+void swap_blocks(int len, fftw_complex* sym);
+void samples_fft_swap(fftw_complex* samples, fftw_complex* symbols);
 
 int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr);
 void sdr_init(struct sdr_state_t *sdr);

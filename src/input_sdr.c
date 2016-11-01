@@ -42,6 +42,16 @@ void swap_blocks(int len, fftw_complex* sym)
 }
 
 
+void samples_fft_swap(fftw_complex* samples, fftw_complex* symbols)
+{
+  // fftw_plan fftw_plan_dft_1d(int n, fftw_complex *in, fftw_complex *out, int sign, unsigned flags); 
+  fftw_plan p = fftw_plan_dft_1d(DAB_T_CS, samples, symbols, FFTW_FORWARD, FFTW_ESTIMATE);
+  fftw_execute(p);
+  fftw_destroy_plan(p);
+  swap_blocks(DAB_T_CS, symbols);
+}
+
+
 void dqpsk_step(fftw_complex a, fftw_complex b, fftw_complex *out) 
 {
   double magsqb = b[0]*b[0] + b[1]*b[1];
@@ -67,7 +77,7 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     cbWrite(&(sdr->fifo),&sdr->input_buffer[i]);
   }
 
-  // timeshifts in bytes
+  // timeshifts in bytes; positive skip, negative unread from last time
   int offset = sdr->coarse_timeshift + sdr->fine_timeshift;
 
   /* Check for data in fifo */
@@ -76,8 +86,9 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     return 0;
   }
 
-  fprintf(stderr, "offset: %6d; cts: %6d fts: %6d\n",
-  	  offset, sdr->coarse_timeshift, sdr->fine_timeshift);
+  int ctsa = -99999; // dab_coarse_time_sync(sdr->real, 1)  // heavy debug only
+  fprintf(stderr, "offset: %6d; ctsa: %6d, cts: %6d fts: %6d \n",
+  	  offset, ctsa, sdr->coarse_timeshift, sdr->fine_timeshift);
   
   /* read fifo, 2 reads (Q/I) per sample */
   sdr_read_fifo(&(sdr->fifo), 2*DAB_T_FRAME, offset, sdr->buffer);
@@ -101,7 +112,7 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
 
   /* coarse time sync */
   /* performance bottleneck atm */
-  sdr->coarse_timeshift = dab_coarse_time_sync(sdr->real,sdr->filt,sdr->force_timesync);
+  sdr->coarse_timeshift = dab_coarse_time_sync(sdr->real, sdr->force_timesync);
   // we are not in sync so -> next frame
   sdr->force_timesync=0;
   if (sdr->coarse_timeshift != 0) {
@@ -117,20 +128,16 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
 
   /* fine time sync */
   sdr->fine_timeshift = dab_fine_time_sync(sdr->dab_frame);
+  /* for (i=-500; i<500; i+=100) { */
+  /*   int tfts = dab_fine_time_sync(sdr->dab_frame + i) / 2; */
+  /*   fprintf(stderr, "test fine shift %6d : %6d\n", i, tfts); */
+  /* } */
+
 
 
   /* coarse_frequency shift */
-  // fftw_plan fftw_plan_dft_1d(int n, fftw_complex *in, fftw_complex *out, int sign, unsigned flags);
-  fftw_plan p;
-  // FIXME why 505=DAB_T_GUARD+1??
-  p = fftw_plan_dft_1d(DAB_T_CS, 
-		       &sdr->dab_frame[DAB_T_NULL + DAB_T_GUARD/2], 
-		       sdr->symbols[0], 
-		       FFTW_FORWARD, 
-		       FFTW_ESTIMATE);
-  fftw_execute(p);
-  fftw_destroy_plan(p);
-  swap_blocks(DAB_T_CS, sdr->symbols[0]); // swap upper and lower blocks (of the PRS)
+  // removed fixme why 505=DAB_T_GUARD+1??
+  samples_fft_swap(&sdr->dab_frame[DAB_T_NULL + DAB_T_GUARD/2], sdr->symbols[0]);
 
   int32_t coarse_freq_shift = dab_coarse_freq_sync_2(sdr->symbols[0]);
   if (abs(coarse_freq_shift) > 1) {
@@ -151,15 +158,9 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
   // processing i=0 (again) is needed if usage (phase) of DAB_T_GUARD above
   // is different from here, because that changes relative phase too much already!
   for (i=0; i<DAB_SYMBOLS_IN_FRAME; i++) {
-    p = fftw_plan_dft_1d(DAB_T_CS, 
-			 &sdr->dab_frame[DAB_T_NULL + (DAB_T_SYM*i) + DAB_T_GUARD/2],
-			 sdr->symbols[i], 
-			 FFTW_FORWARD,
-			 FFTW_ESTIMATE);
-    fftw_execute(p);
-    fftw_destroy_plan(p);
-    swap_blocks(DAB_T_CS, sdr->symbols[i]);
+    samples_fft_swap(&sdr->dab_frame[DAB_T_NULL + (DAB_T_SYM*i) + DAB_T_GUARD/2], sdr->symbols[i]);
   }
+
   for (j=1; j<DAB_SYMBOLS_IN_FRAME; j++) {
     for (i=0; i<DAB_T_CS; i++) {
       dqpsk_step(sdr->symbols[j][i], sdr->symbols[j-1][i], &sdr->symbols_d[j*DAB_T_CS + i]);
@@ -175,14 +176,14 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     k = 0;
     for (i=0; i<DAB_T_CS; i++) {
       int empty_channels = DAB_T_CS - DAB_CARRIERS;
-      // 256..1792
+      // 256..1792 \ 1024
       if (empty_channels/2 <= i && i != DAB_T_CS/2 && i <= DAB_CARRIERS+empty_channels/2) {
         kk = rev_freq_deint_tab[k++];
-        dst[kk]              = (sdr->symbols_d[j*DAB_T_CS+i][0] < 0);
-        dst[kk+DAB_CARRIERS] = (sdr->symbols_d[j*DAB_T_CS+i][1] > 0);
+        dst[kk]              = (sdr->symbols_d[j*DAB_T_CS + i][0] < 0);
+        dst[kk+DAB_CARRIERS] = (sdr->symbols_d[j*DAB_T_CS + i][1] > 0);
       }
     }
-    dst += 2*DAB_CARRIERS;  // 3072
+    dst += 2*DAB_CARRIERS;  // 3072  (2 bits per symbol*carrier)
   }
   
   //fprintf(stderr, "   ok\n");

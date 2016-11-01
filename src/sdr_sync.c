@@ -22,7 +22,9 @@ david.may.muc@googlemail.com
 #include "sdr_sync.h"
 #include "sdr_prstab.c"
 #include "dab_constants.h"
-#include "input_sdr.h" // for FILT_SAMPLING
+#include "input_sdr.h" // for samples_fft_swap
+
+#define FILT_SAMPLING 10
 
 #define dbg 0
 
@@ -42,14 +44,16 @@ void cpx_mul(fftw_complex a, fftw_complex b, float bConjSign, fftw_complex *res)
 }
 
 
+
 // see also (maybe?) https://en.wikipedia.org/wiki/Guard_interval
 // real: real part
 // filt: temporary buffer to do work
 // force_timesync: boolean, timesync is done anyway; (why? where to?)
 // ret: bytes (2*samples) of shift; should be multiple of 20
-uint32_t dab_coarse_time_sync(int8_t * real, float * filt, uint8_t force_timesync) {
+uint32_t dab_coarse_time_sync(int8_t * real, uint8_t force_timesync) {
   int32_t tnull = DAB_T_NULL; // was 2662? why?   (2656)
   int32_t j,k;
+  float filt[(DAB_T_FRAME-DAB_T_NULL)/FILT_SAMPLING];
 
   // check for energy in fist tnull samples
   float e=0;
@@ -80,7 +84,7 @@ uint32_t dab_coarse_time_sync(int8_t * real, float * filt, uint8_t force_timesyn
 
 
   //fprintf(stderr,"Resync\n");
-  // energy was to high so we assume we are not in sync
+  // energy was too high so we assume we are not in sync
   // subsampled filter to detect where the null symbol is
   for (j=0; j<(DAB_T_FRAME-tnull)/FILT_SAMPLING; j++) {
     filt[j] = 0;
@@ -120,6 +124,7 @@ uint32_t dab_coarse_time_sync(int8_t * real, float * filt, uint8_t force_timesyn
   return minPos*2;
 }
 
+
 void debug_print_array(int len, fftw_complex *arr, char* fileName)
 {
   int i;
@@ -135,49 +140,91 @@ void debug_print_array(int len, fftw_complex *arr, char* fileName)
 }
 
 
+void debug_time_sync(fftw_complex * frame)
+{
+  int i;
+  fprintf(stderr, "decr steps forward: ");
+  float suml = 0;
+  float sumr = 0;
+  int lastprinted = 0;
+  for (i=0; i<DAB_T_SYM; i++) {
+    suml += cpx_abs(frame[i]);
+    sumr += cpx_abs(frame[DAB_T_NULL + i]);
+    if (sumr < suml) {
+      if (!lastprinted) {
+	fprintf(stderr, "%d", i);
+	lastprinted = 1;
+      }
+    }
+    else {
+      if (lastprinted) {
+	fprintf(stderr, "..%d, ", i);
+	lastprinted = 0;
+      }
+    }
+  }
+  fprintf(stderr, "\n");
+
+  fprintf(stderr, "decr steps backward: ");
+  suml = 0;
+  sumr = 0;
+  lastprinted = 0;
+  for (i=1; i<DAB_T_SYM; i++) {
+    suml += cpx_abs(frame[DAB_T_FRAME - i]);
+    sumr += cpx_abs(frame[DAB_T_NULL - i]);
+    if (suml < sumr) {
+      if (!lastprinted) {
+	fprintf(stderr, "-%d", i);
+	lastprinted = 1;
+      }
+    }
+    else {
+      if (lastprinted) {
+	fprintf(stderr, "..-%d, ", i);
+	lastprinted = 0;
+      }
+    }
+  }
+  fprintf(stderr, "\n");
+}
+
+
 // frame: start of frame with (previous) timeshifts applied -> starts with null symbol
-// ret: new timeshift (in bytes = 2*samples) relative to the frame input
+// ret: new timeshift (in bytes to skip = 2*samples) relative to the frame input
 int32_t dab_fine_time_sync(fftw_complex * frame) 
 {
+  // debug_time_sync(frame);
+
+  // We want to shift backwards a bit so we're always inside the symbol.
+  int guardShift = DAB_T_GUARD/2;
+  // guard (with respedt to PRS) is considered a the beginning of the
+  // symbol (TODO: no reference found).  
+  int start = DAB_T_NULL + DAB_T_GUARD - guardShift;
   /* correlation in frequency domain 
      e.g. J.Cho "PC-based receiver for Eureka-147" 2001
      e.g. K.Taura "A DAB receiver" 1996
   */
-  debug_print_array(DAB_T_SYM-DAB_T_NULL, frame + DAB_T_NULL, "prs_received.dat");
+  debug_print_array(DAB_T_SYM, frame + start, "prs_received.dat");
 
   /* first we have to transfer the receive prs symbol in frequency domain */
   fftw_complex prs_received_fft[DAB_T_CS];
-  fftw_plan p;
-  p = fftw_plan_dft_1d(DAB_T_CS, &frame[DAB_T_NULL+DAB_T_GUARD], &prs_received_fft[0], 
-		       FFTW_FORWARD, FFTW_ESTIMATE);
-  fftw_execute(p);
-  fftw_destroy_plan(p);
+  samples_fft_swap(&frame[start], prs_received_fft);
   debug_print_array(DAB_T_CS, prs_received_fft, "prs_received_fft.dat");
 
   /* fftshift the received prs
      at this point we have to be coarse frequency sync 
      however we can simply shift the bins */
   fftw_complex prs_rec_shift[DAB_CARRIERS];
-  // TODO allow for coarse frequency shift !=0 
-  // int32_t cf_shift = 0;
-  // matlab notation (!!!-1)
-  // 769:1536+s   DAB_CARRIERS+s
-  //  2:769+s why 2? I dont remember, but peak is very strong
-  int mid = DAB_CARRIERS/2; // 768
   int i;
-  for (i=0; i<DAB_CARRIERS; i++) {
-    // 1280 = 2048-768 = DAB_T_CS - mid
-    if (i < mid) {
-      // prs_received_fft[1280..2048-1] -> prs_rec_shift[0..768-1]
-      prs_rec_shift[i][0] = prs_received_fft[i+(DAB_T_CS-mid)][0];
-      prs_rec_shift[i][1] = prs_received_fft[i+(DAB_T_CS-mid)][1];
-    }
-    else { // i>=768
-      // FIXME: magic numbers here: 765 = 768-3
-      int unexplained_shift = 3; // was 3
-      // prs_received_fft[3..771-1] -> prs_rec_shift[768..1536-1]
-      prs_rec_shift[i][0] = prs_received_fft[i-(mid-unexplained_shift)][0];
-      prs_rec_shift[i][1] = prs_received_fft[i-(mid-unexplained_shift)][1];
+  int kk=0;
+  for (i=0; i<DAB_T_CS; i++) {
+    int empty_channels = DAB_T_CS - DAB_CARRIERS;
+    // 256..1792 \ 1024
+    if (empty_channels/2 <= i && i != DAB_T_CS/2 && i <= DAB_CARRIERS+empty_channels/2) {
+      // no frequency deinterlacing here
+      prs_rec_shift[kk][0] = prs_received_fft[i][0];
+      prs_rec_shift[kk][1] = prs_received_fft[i][1];
+      kk++;
     }
   }
   debug_print_array(DAB_CARRIERS, prs_rec_shift, "prs_rec_shift.dat");
@@ -200,28 +247,37 @@ int32_t dab_fine_time_sync(fftw_complex * frame)
   debug_print_array(DAB_CARRIERS, convoluted_prs_time, "convoluted_prs_time.dat");
 
   uint32_t maxPos=0;
-  float tempVal = 0;
   float maxVal=-99999;
   for (i=0; i<DAB_CARRIERS; i++) {
-    tempVal = cpx_abs(convoluted_prs_time[i]);
+    float tempVal = cpx_abs(convoluted_prs_time[i]);
     if (tempVal>maxVal) {
       maxPos = i;
       maxVal = tempVal;
     }
   }
 
+  int shiftSamples = maxPos;
+  // rescale to full DAB_T_CS
+  shiftSamples = (shiftSamples * DAB_T_CS) / DAB_CARRIERS;
+  // undo the guardShift
+  shiftSamples = (shiftSamples - guardShift) % DAB_T_CS;
+  // wrap around to +/- DAB_T_CS
+  if (shiftSamples >= DAB_T_CS/2) {
+    shiftSamples -= DAB_T_CS;
+  }
+
   // FIXME: magic number here: 8 (was 16 before refactoring of *2)
-  int magicAdditiveOnlyPosSide = 8;
-  int shiftSamples =
-    (maxPos < DAB_CARRIERS/2)
-    ? maxPos + magicAdditiveOnlyPosSide
-    : maxPos - DAB_CARRIERS;
+  /* int magicAdditiveOnlyPosSide = 0; // FIXME was 8 */
+  /* shiftSamples = */
+  /*   (maxPos < DAB_CARRIERS/2) */
+  /*   ? maxPos + magicAdditiveOnlyPosSide */
+  /*   : maxPos - DAB_CARRIERS; */
 
   /* int oldMethod =  dab_fine_time_sync_old(frame); */
   /* fprintf(stderr, "FINE TIME SYNC COMPARISON: %10d %10d %10d \n",  */
   /* 	  oldMethod, shiftSamples*2, oldMethod-shiftSamples*2); */
 
-  return shiftSamples * 2;
+  return shiftSamples * 2; // convert to bytes to skip
 }
 
 
@@ -316,7 +372,7 @@ double dab_fine_freq_corr(fftw_complex * dab_frame)
   }
   
   for (i=0; i<DAB_T_GUARD; i++) {
-    // angle[i] = atan2(lr[i][1], lr[i][0]);
+    // TODO: this should be weighted maybe (and atan is probably slow)
     double angle = atan2(lr[i][1], lr[i][0]);
     mean += angle;
     meanofsq += angle*angle;
@@ -326,8 +382,8 @@ double dab_fine_freq_corr(fftw_complex * dab_frame)
 
   // magic numbers here: 1000  (samp_rate / DAB_T_CS)
   ffs = mean / (2 * M_PI) * 1000;
-  // fprintf(stderr, "mean phase: %6.3f  +/-%7.3f;  ffs: %4.1f\n", 
-  //    mean, sqrt(meanofsq - (mean*mean)), ffs);
+  fprintf(stderr, "mean phase: %6.3f  +/-%7.3f;  ffs: %4.1f\n", 
+     mean, sqrt(meanofsq - (mean*mean)), ffs);
   //fprintf(stderr, "\n%f\n",ffs);
 
   fftw_free(left);
