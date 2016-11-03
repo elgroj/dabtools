@@ -1,6 +1,7 @@
 CC=gcc
-CFLAGS=-O3 -W -Wall -g
-LDFLAGS=-lm -lfftw3 -lpthread -g
+# PROFILEFLAGS=-pg
+CFLAGS=-O3 -W -Wall -g -ffast-math $(PROFILEFLAGS)
+LDFLAGS=-lm -lfftw3 -lpthread -g $(PROFILEFLAGS)
 
 CFLAGS+=$(shell pkg-config --cflags librtlsdr)
 LDFLAGS+=$(shell pkg-config --libs librtlsdr)
