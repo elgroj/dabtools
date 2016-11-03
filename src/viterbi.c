@@ -454,9 +454,10 @@ unsigned int nbits	/* Number of output bits */
 //-----
 int init_viterbi()
 {
-    int amp = 1;
-    double noise = 1.0;
-
-    gen_met(mettab,amp,noise,0.,4);
-    return 0;
+    // values were 1 and 1.0
+  int amp = 128; // must match settings in depuncture.c:to_viterbi
+  double noise = 0.7; // was 1.0; note: some of the noise is because of puncturing
+  
+  gen_met(mettab,amp,noise,0.,4);
+  return 0;
 }
