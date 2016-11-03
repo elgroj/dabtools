@@ -35,12 +35,16 @@
 /* 0 is a "strong 0" and 255 is a "strong 1" */
 static inline int to_viterbi(int x)
 {
+  // this must correspond to the "amp" parameter used in init_viterbi in viterbi.c
+
+  
 #ifdef ENABLE_SPIRAL_VITERBI
-  return ((x == 0) ? 0 : 255);
+  return ((x < 128) ? 0 : 255);
 #else
-  return (OFFSET-1) + 2*x;
+  return x;
 #endif
 }
+
 
 void fic_depuncture(uint8_t *obuf, uint8_t *inbuf)
 {
