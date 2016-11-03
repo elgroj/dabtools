@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include "sdr_fifo.h"
 
 
@@ -39,6 +40,25 @@ void cbWrite(CircularBuffer *cb, uint8_t *elem)
   cb->count++;
 }
 
+void cbWriteN(CircularBuffer *cb, unsigned bytes, uint8_t *buffer)
+{
+  unsigned capacity = cb->size - cb->count;
+  if (bytes > capacity) {
+    error("fifo write overflow on block cbWriteN", capacity, bytes);
+  }
+  uint32_t end = (cb->start + cb->count) % cb->size;
+  unsigned restBuf = cb->size - end;
+  if (bytes <= restBuf) {
+    memcpy(cb->elems + end, buffer, bytes);
+  }
+  else {
+    memcpy(cb->elems + end, buffer, restBuf);
+    memcpy(cb->elems, buffer + restBuf, bytes - restBuf);
+  }
+
+  cb->count += bytes;
+}
+
 void cbRead(CircularBuffer *cb, uint8_t *elem)
 {
   if (cbIsEmpty(cb)) {
@@ -63,31 +83,33 @@ void cbUnread(CircularBuffer *cb)
 
 int32_t sdr_read_fifo(CircularBuffer * fifo, uint32_t bytes, int32_t shift, uint8_t * buffer)
 {
-  int32_t i=0;
-  uint32_t j=0;
-  uint8_t dump;
+  if (shift > (int)fifo->count) {
+    error("fifo read underflow on shift", fifo->count, shift);
+  }
+  if ((int)fifo->count - shift > (int)fifo->size) {
+    error("fifo unread overflow on shift", fifo->count, shift);
+  }
+  fifo->start = (fifo->start + shift) % fifo->size;
+  fifo->count -= shift;
 
-  if (shift > 0) {
-    if (shift > (int)fifo->count) {
-      error("fifo read underflow on shift", fifo->count, shift);
-    }
-    for (i=0; i<shift; i++)
-      cbRead(fifo, &dump);
-  }
-  else {
-    // shift < 0
-    if ((int)fifo->count - shift > (int)fifo->size) {
-      error("fifo unread overflow on shift", fifo->count, shift);
-    }
-    for (i=0; i<-shift; i++)
-      cbUnread(fifo);
-  }
 
   if (bytes > fifo->count) {
     error("fifo read underflow on actual read", fifo->count, bytes);
   }
-  for (j=0; j<bytes; j++)
-    cbRead(fifo, &buffer[j]);
+
+  /* uint32_t j=0; */
+  /* for (j=0; j<bytes; j++) */
+  /*   cbRead(fifo, &buffer[j]); */
+  unsigned restBuf = fifo->size - fifo->start;
+  if (bytes <= restBuf) {
+    memcpy(buffer, fifo->elems + fifo->start, bytes);
+  }
+  else {
+    memcpy(buffer, fifo->elems + fifo->start, restBuf);
+    memcpy(buffer + restBuf, fifo->elems, bytes - restBuf);
+  }
+  fifo->start = (fifo->start + bytes) % fifo->size;
+  fifo->count -= bytes;
 
   return 1;
 }
