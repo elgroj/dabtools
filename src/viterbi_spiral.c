@@ -308,8 +308,9 @@ int update_viterbi_blk_GENERIC(void *p, COMPUTETYPE *syms,int nbits){
     if (max_spread<max-min)
       max_spread=max-min;
 #endif
-
-    renormalize(vp->new_metrics->t, RENORMALIZE_THRESHOLD);
+    
+    // FIXME renormalize is undefined, but under -O1 (or higher) it's not called
+    /* renormalize(vp->new_metrics->t, RENORMALIZE_THRESHOLD); */
     
     ///     Swap pointers to old and new metrics
     tmp = vp->old_metrics;
