@@ -33,16 +33,11 @@
 #define OFFSET 128
 
 /* 0 is a "strong 0" and 255 is a "strong 1" */
-static inline int to_viterbi(int x)
+static inline int to_viterbi(uint8_t x)
 {
   // this must correspond to the "amp" parameter used in init_viterbi in viterbi.c
-
-  
-#ifdef ENABLE_SPIRAL_VITERBI
-  return ((x < 128) ? 0 : 255);
-#else
+  // x was assumed to be boolean, now it's a byte
   return x;
-#endif
 }
 
 
