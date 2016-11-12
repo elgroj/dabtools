@@ -26,4 +26,9 @@
 //  assert(DAB_T_FRAME == DAB_SYMBOLS_IN_FRAME * DAB_T_SYM + DAB_T_NULL);
 //  assert(DAB_T_SYM == DAB_T_CS + DAB_T_GUARD);
 
+#define SAMPLING_RATE 2048000
+
+// carrier freqency in Hz: 1000
+#define DAB_F_C (SAMPLING_RATE/DAB_T_CS)
+
 #endif
