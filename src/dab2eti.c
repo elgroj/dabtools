@@ -88,7 +88,7 @@ static void *demod_thread_fn(void *arg)
       int randAway = DAB_F_C/2 / 2;
       // prefer going back (2*randAway) than away
       int preference = ((sdr->frequency > orig_frequency) ? 2*randAway : randAway);
-      int randPart = (rand() % 3*randAway) - preference;
+      int randPart = (rand() % (3*randAway)) - preference;
 
       sdr->frequency += DAB_F_C*shift + randPart;
       /* fprintf(stderr, "coarse shift done : %i\n", rtlsdr_get_center_freq(dev)); */
