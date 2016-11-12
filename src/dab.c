@@ -32,9 +32,19 @@ void init_dab_state(struct dab_state_t **dab, void* device_state, void (* eti_ca
 #endif
 }
 
-void dab_process_frame(struct dab_state_t *dab)
+
+// return:
+// -99 unknown problem
+// -3 nothing decoded
+// -2 some fibs decoded
+// -1 lock lost
+//  0 12 fibs, counting up for lock
+//  1 (already) locked
+//  2 new lock
+int dab_process_frame(struct dab_state_t *dab)
 {
   int i;
+  int ret = -99;
 
   fic_decode(dab, &dab->tfs[dab->tfidx]);
   int fibOkCount = dab->tfs[dab->tfidx].fibs.ok_count;
@@ -51,22 +61,28 @@ void dab_process_frame(struct dab_state_t *dab)
 	dab->locked = 1;
 	//fprintf(stderr,"Locked with center-frequency %dHz\n",sdr->frequency);
 	fprintf(stderr,"Locked\n");
+	ret = 2;
       }
       else {
 	// already locked
 	fprintf(stderr, "[%2d:%2d] ", fibOkCount, dab->okcount);
+	ret = 1;
       }
     }
     else {
+      ret = 0;
       // good but not yet locked
       fprintf(stderr, "(%2d:%2d) ", fibOkCount, dab->okcount);
     }
-  } else {
+  } 
+  else {
     if (fibOkCount > 0) {
       fprintf(stderr, "(%5d) ", fibOkCount);
+      ret = -2;
     }
     else {
       fprintf(stderr, "      _ ");
+      ret = -3;
     }
     dab->okcount = 0;
     if (dab->locked) {
@@ -74,7 +90,7 @@ void dab_process_frame(struct dab_state_t *dab)
       fprintf(stderr,"Lock lost, resetting ringbuffer\n");
       dab->ncifs = 0;
       dab->tfidx = 0;
-	  return;
+      return -1;
     }
   }
 
@@ -91,7 +107,8 @@ void dab_process_frame(struct dab_state_t *dab)
       dab->cifs_msc[dab->ncifs++] = dab->tfs[dab->tfidx].msc_symbols_demapped[36];
 	  dab->cifs_fibs[dab->ncifs] = dab->tfs[dab->tfidx].fibs.FIB[9];
       dab->cifs_msc[dab->ncifs++] = dab->tfs[dab->tfidx].msc_symbols_demapped[54];
-    } else {
+    } 
+    else {
       if (!dab->ens_info_shown) {
         dump_ens_info(&dab->ens_info);
 	    //for (i=0;i<16;i++) { fprintf(stderr,"cifs_msc[%d]=%d\n",i,(int)cifs_msc[i]); }
@@ -113,4 +130,5 @@ void dab_process_frame(struct dab_state_t *dab)
     }
     dab->tfidx = (dab->tfidx + 1) % 5;
   }
+  return ret;
 }
