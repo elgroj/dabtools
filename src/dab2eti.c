@@ -31,6 +31,8 @@ david.may.muc@googlemail.com
 #include "dab.h"
 #include "input_sdr.h"
 #include "input_wf.h"
+#include "dab_constants.h"
+#include "tunables.h"
 
 /* Wavefinder state */
 static struct wavefinder_t  wf;
@@ -47,11 +49,9 @@ static sem_t data_ready;
 #define AUTO_GAIN -100
 #define DEFAULT_ASYNC_BUF_NUMBER 32
 
-uint32_t corr_counter;
-uint32_t ccount=0;
-
 static void sighandler(int signum)
 {
+  (void)signum; // ignore signum parameter
   fprintf(stderr, "Signal caught, exiting!\n");
   do_exit = 1;
   rtlsdr_cancel_async(dev);
@@ -61,122 +61,75 @@ static void *demod_thread_fn(void *arg)
 {
   struct dab_state_t *dab = arg;
   struct sdr_state_t *sdr = dab->device_state;
-  /* int i,j; */
-
-  const int cfs_clamp = 8;
-  const int cfs_min_run = 4;
-  const int cfs_rand_thr = 10;
 
   unsigned int orig_frequency = sdr->frequency;
-  int prev_coarse_freq_shift = 0;
-  int coarse_freq_shift_run_length = 0;
-  int coarse_freq_shifts_ignored = 0;
+  int blockFreqShift = 1; // read some stable frames before freq shifting again
 
   while (!do_exit) {
     sem_wait(&data_ready);
-    int ok = sdr_demod(&dab->tfs[dab->tfidx], sdr);
-    if (ok) {
-      dab_process_frame(dab);
+    int demodStatus = sdr_demod(&dab->tfs[dab->tfidx], sdr);
+    if (demodStatus <= -2) {
+      // half-read or out-of sync frame, nothing to do really
+      continue;
     }
-    //dab_fic_parser(dab->fib,&sinfo,&ana);
-    // calculate error rates
-    //dab_analyzer_calculate_error_rates(&ana,dab);
+    if (demodStatus >= -2) {
+      blockFreqShift--;
+    }
 
     unsigned int prev_freq = sdr->frequency;
-
-    // TODO instead of this run length stuff, we could also try to etimate
-    // the correlation in dab_coarse_freq_sync_2
 
     // TODO This whole tuning process should generally favour going to
     // the frequency given on the command line.  Otherwise we'll always have
     // the problem that the tuning just wanders off to nowhere.
 
-    /* clamp, because values around +/-14 tend to be unreliable IME */
-    int coarse_freq_shift_clamped = sdr->coarse_freq_shift;
-    if (coarse_freq_shift_clamped >= cfs_clamp) {
-      coarse_freq_shift_clamped = cfs_clamp;
+    if (abs(sdr->coarse_freq_shift) > 0 && blockFreqShift <= 0) {
+      int shift = sdr->coarse_freq_shift;
+      // always randomize
+      int randAway = DAB_F_C/2 / 2;
+      // prefer going back (2*randAway) than away
+      int preference = ((sdr->frequency > orig_frequency) ? 2*randAway : randAway);
+      int randPart = (rand() % 3*randAway) - preference;
+
+      sdr->frequency += DAB_F_C*shift + randPart;
+      /* fprintf(stderr, "coarse shift done : %i\n", rtlsdr_get_center_freq(dev)); */
     }
-    if (coarse_freq_shift_clamped <= -cfs_clamp) {
-      coarse_freq_shift_clamped = -cfs_clamp;
+    else if (abs(sdr->fine_freq_shift) > FFS_THRESHOLD && blockFreqShift <= 0) {
+      // Problem: when ffs is determined, some data is in the fifo already.
+      // chanching the frequency messes qith the phases.  Also, the same ffs is determined again
+      // based on old samples and the frequency is shifted again, which is too much shift.
+      // do some weighting here.
+      // TODO: maybe do weighting before, so ffs is applied when fifo is rather empty
+      /* double weight =  (1.0 - sdr->fifo.count/2.0/DAB_T_FRAME); */
+      /* if (sdr->fifo.count < 2 * DAB_T_FRAME) { */
+      /* } */
+      sdr->frequency += sdr->fine_freq_shift;
     }
-    
-    // we get 0 if a time shift was done or queue wasn't full etc.
-    if (coarse_freq_shift_clamped != 0) {
-      if (coarse_freq_shift_clamped == prev_coarse_freq_shift) {
-	coarse_freq_shift_run_length++;
-      }
-      else {
-	coarse_freq_shift_run_length = 0;
-      }
-      coarse_freq_shifts_ignored++;
-
-      if (coarse_freq_shift_run_length < cfs_min_run) {
-	fprintf(stderr, 
-		"coarse frequency shift indicated, waiting for confirmation : +/-%d|%3d| %3d %3d %3d\n", 
-		cfs_clamp, prev_coarse_freq_shift, 
-		sdr->coarse_freq_shift, coarse_freq_shift_run_length,
-		coarse_freq_shifts_ignored);
-      }
-
-      prev_coarse_freq_shift = coarse_freq_shift_clamped;
-    }
-
-
-
-    /* if (abs(sdr->coarse_freq_shift)>1) { */
-    if (abs(coarse_freq_shift_clamped) > 1 && coarse_freq_shift_run_length >= cfs_min_run) {
-      // int shift = ((coarse_freq_shift_clamped > 0) ? 1 : -1);
-      // the first read after a frequency shift is usually not so good, so we try this:
-      int shift = coarse_freq_shift_clamped;
-      // int shift = coarse_freq_shift_clamped / 2; // not really better
-
-      sdr->frequency += 1000*shift;
-      // make next shift easier: (doesn't work so good, see above)
-      prev_coarse_freq_shift -= shift;
-      coarse_freq_shift_run_length-=2;
-      
-      rtlsdr_set_center_freq(dev, sdr->frequency);
-      fprintf(stderr, "coarse shift done : %i\n", rtlsdr_get_center_freq(dev));
-      coarse_freq_shifts_ignored = 0;
-    }
-
-    /* if (abs(sdr->coarse_freq_shift) ==1) { */
-    if (abs(coarse_freq_shift_clamped) == 1 && coarse_freq_shift_run_length >= cfs_min_run) {
-      sdr->frequency += (rand() % 1000) * coarse_freq_shift_clamped;
-
-      rtlsdr_set_center_freq(dev,sdr->frequency);
-      fprintf(stderr,"new center freq : %i\n",rtlsdr_get_center_freq(dev));//
-      coarse_freq_shifts_ignored = 0;
-    }
-
-    // On my receiver, reception seems to be really bad when we're just 1kHz away.
-    // I'm getteing lots of rather random coarse_freq_shift-s
-    if (abs(coarse_freq_shift_clamped) > 1 && coarse_freq_shifts_ignored > cfs_rand_thr) {
-      int preference = ((sdr->frequency > orig_frequency) ? 1000 : 500);
-      sdr->frequency += (rand() % 1500) - preference;
-      
-      rtlsdr_set_center_freq(dev, sdr->frequency);
-      fprintf(stderr, "random center freq adjustment : %i\n", rtlsdr_get_center_freq(dev));
-      coarse_freq_shifts_ignored = 0;
-    }
-
-    if (abs(sdr->coarse_freq_shift)<1 && (abs(sdr->fine_freq_shift) > 50)) {
-      // TODO: why /3? some hacky fix for 3 reads per frame or value smoothing?
-      sdr->frequency += sdr->fine_freq_shift/3;
-      rtlsdr_set_center_freq(dev,sdr->frequency);
-      fprintf(stderr,"                                          ffs : %f\n",sdr->fine_freq_shift);//
-      sdr->fine_freq_shift = 0;  // joerg: otherwise this will wander away on every half-read frame
+    else if (blockFreqShift > 0) {
+      fprintf(stderr,"frequency shifts blocked so readings stabilize: %d\n", blockFreqShift);
+      sdr->force_timesync = 1;
     }
 
     if (sdr->frequency != prev_freq) {
-      fprintf(stderr,"Adjusting centre-frequency to %dHz\n",sdr->frequency);
-    }    
-    ccount += 1;
-    if (ccount == 10) {
-      ccount = 0;
-      //print_status(dab);
+      fprintf(stderr,"\nAdjusting centre-frequency to %dHz (by %d Hz)\n",
+	      sdr->frequency, sdr->frequency - prev_freq);
+      rtlsdr_set_center_freq(dev,sdr->frequency);
+      /* fprintf(stderr,"ffs : %f\n",sdr->fine_freq_shift);// */
+      sdr->fine_freq_shift = 0;  // joerg: otherwise this will wander away on every half-read frame
+      blockFreqShift = FS_BLOCKING;
     }
-  }
+
+    // viterbi decoding takes time; make sure we have set the new
+    // freqeuncies before new data are comming in.
+    if (demodStatus >= 0) {
+      int dab_status = dab_process_frame(dab);
+      if (dab_status <= -3) {
+	sdr->force_timesync = 1;
+      }
+    }
+    //dab_fic_parser(dab->fib,&sinfo,&ana);
+    // calculate error rates
+    //dab_analyzer_calculate_error_rates(&ana,dab);
+  } // while not exit
   return 0;
 }
 
@@ -195,7 +148,16 @@ static void rtlsdr_callback(uint8_t *buf, uint32_t len, void *ctx)
 
 static void eti_callback(uint8_t* eti)
 {
-  write(1, eti, 6144);
+  int count = 6144;
+  int num = write(1, eti, count);
+  if (num < 0) {
+    perror("dab2eti: ERROR during write to stdout");
+    exit(1);
+  }
+  else if (num != count) {
+    fprintf(stderr, "dab2eti: ERROR on write to stdout: only %d bytes written\n", num);
+    exit(1);
+  }
 }
 
 
@@ -206,7 +168,7 @@ static int do_sdr_decode(struct dab_state_t* dab, int frequency, int gain)
   int32_t device_count;
   int i,r;
   char vendor[256], product[256], serial[256];
-  uint32_t samp_rate = 2048000;
+  uint32_t samp_rate = SAMPLING_RATE;
 
   memset(&sdr,0,sizeof(struct sdr_state_t));
 
@@ -335,6 +297,7 @@ static int do_wf_decode(struct dab_state_t* dab, int frequency)
     wf_read_frame(wf,&dab->tfs[dab->tfidx]);
     dab_process_frame(dab);
   }
+  return 0; // not reached
 }
 
 void usage(void)
