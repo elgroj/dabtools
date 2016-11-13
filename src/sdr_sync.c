@@ -146,6 +146,7 @@ int dab_coarse_time_sync(int8_t * real, uint8_t force_timesync) {
 // start can be negative up to >=-DAB_T_NULL
 int time_sync_sub(fftw_complex * frame, int start, int end, int step)
 {
+  // assume most DC offset is removed by hardware
   double sum = 0.0;
   double minVal = sum;
   int minPos = start;
@@ -367,126 +368,32 @@ int32_t dab_coarse_freq_sync_4(int symcount, fftw_complex (*symbols)[DAB_T_CS])
 }
 
 
-// determines phase shift over the PRS; see (guess) https://en.wikipedia.org/wiki/Cyclic_prefix
+// determines phase shift over one or more symbols; see (guess) https://en.wikipedia.org/wiki/Cyclic_prefix
 // ret: frequency shift in Hz, domain is +/-500
 double dab_fine_freq_corr(fftw_complex * dab_frame)
 {
-  fftw_complex *left;
-  fftw_complex *right;
-  fftw_complex *lr;
-  // double angle[DAB_T_GUARD];
-  double mean = 0;
-  double meanofsq =0;
-  double ffs;
-  left = fftw_malloc(sizeof(fftw_complex) * DAB_T_GUARD);
-  right = fftw_malloc(sizeof(fftw_complex) * DAB_T_GUARD);
-  lr = fftw_malloc(sizeof(fftw_complex) * DAB_T_GUARD);
-  // a frequency shift might have been applied in the middle of the frame
-  // determine the new shift from the newest data (last symbol)
-  int skip = DAB_T_NULL + DAB_SYMBOLS_IN_FRAME;
-  uint32_t i;
-  for (i=0; i<DAB_T_GUARD; i++) {
-    // fine_timeshift+DAB_T_NULL: we are looking at the Phase Reference Symbol
-    left[i][0]  = dab_frame[skip+DAB_T_CS+i][0];
-    left[i][1]  = dab_frame[skip+DAB_T_CS+i][1];
-    right[i][0] = dab_frame[skip         +i][0];
-    right[i][1] = dab_frame[skip         +i][1];
-  }
-
-  // the guard is cyclic, so we can calculate the phase shift between them
-  for (i=0; i<DAB_T_GUARD; i++) {
-    cpx_mul(left[i], right[i], -1, &lr[i]);
-  }
-  
-  for (i=0; i<DAB_T_GUARD; i++) {
-    // TODO: this should be weighted maybe (and atan is probably slow)
-    double angle = atan2(lr[i][1], lr[i][0]);
-    mean += angle;
-    meanofsq += angle*angle;
-  }
-  mean /= DAB_T_GUARD;
-  meanofsq /= DAB_T_GUARD;
-
-  ffs = mean / (2 * M_PI) * DAB_F_C;
-  /* fprintf(stderr, "mean phase: %6.3f  +/-%7.3f;  ffs: %4.1f\n",  */
-  /*    mean, sqrt(meanofsq - (mean*mean)), ffs); */
-  //fprintf(stderr, "\n%f\n",ffs);
-
-  fftw_free(left);
-  fftw_free(right);
-  fftw_free(lr);
-    
-  return ffs;
-}
-
-
-
-// TODO: this is somewhat expensive; 1.08s of 8.56s (in sdr_demod)
-
-// looks at the phases from the demodulated symbols
-// return: frequency shift in Hz; domain is +/- 125 (if slope is left at 1)
-double ffs_from_phase(fftw_complex * symbols_d) 
-{
-  int debug = 0;
-
-  int i, j;
+  int numSymbols = 15;
   fftw_complex sum = {0.0, 0.0};
-  fftw_complex sumsq = {0.0, 0.0};
-  int count = 0;
-  double slope = 1.0;
-  for (j=1; j<DAB_SYMBOLS_IN_FRAME; j++) {  // j=0 is PRS/empty
-    int empty_channels = DAB_T_CS - DAB_CARRIERS;
-    // don't sum over unused channels, that just adds noise    
-    for (i = empty_channels/2; i < DAB_T_CS - empty_channels/2; i++) {
-      fftw_complex val, valm;
-      val[0] = symbols_d[ j*DAB_T_CS + i][0];
-      val[1] = symbols_d[ j*DAB_T_CS + i][1];
-      // *rotate*/double-mirror into main quandrant
-      if (val[0] < val[1]*(1-slope)) {
-	val[0] = - val[0];
-	val[1] = - val[1];
-      }
-      if (val[1] < val[0]*(slope-1)) {
-	valm[0] = - val[1];
-	valm[1] = val[0];
-      }
-      else {
-	valm[0] = val[0];
-	valm[1] = val[1];
-      }
+  double angle, ffs;
+  int i, j;
 
-      count++;
-      sum[0] += valm[0]; 
-      sum[1] += valm[1]; 
-      if (debug) {
-	sumsq[0] += valm[0]*valm[0]; 
-	sumsq[1] += valm[1]*valm[1]; 
-      }
+  for (j=DAB_SYMBOLS_IN_FRAME-numSymbols; j<DAB_SYMBOLS_IN_FRAME; j++) {
+    // a frequency shift might have been applied in the middle of the frame
+    // determine the new shift from the newest data (last symbols)
+    int skip = DAB_T_NULL +  j * DAB_T_SYM;
+    for (i=0; i<DAB_T_GUARD; i++) {
+      fftw_complex lr;    
+      // the guard is cyclic, so we can calculate the phase shift between them
+      cpx_mul(dab_frame[skip+DAB_T_CS+i], dab_frame[skip+i], -1, &lr);
+      sum[0] += lr[0];
+      sum[1] += lr[1];
     }
-    // after we have some data, let's rotate the quadrant boundaries somewhat so that
-    // data points don't get rotated/flipped to the wrong group
-    // TODO: could do this rotation on symbols_d, it would help demodulation
-    /* if (j > 3) { */
-    /*   slope = sum[1]/sum[0]; */
-    /* } */
   }
 
-  sum[0] /= count;
-  sum[1] /= count;
+  angle = atan2(sum[1], sum[0]);
 
-  if (debug) {
-    sumsq[0] /= count;
-    sumsq[1] /= count;
-    sumsq[0] -= sum[0]*sum[0];
-    sumsq[1] -= sum[1]*sum[1];
-  }
-
-  double angle = (M_PI/4) - atan2(sum[1], sum[0]);
-  double ffs = angle / (2 * M_PI) * DAB_F_C;
-  if (debug) {
-    fprintf(stderr, "|ffs2: %3.1f angle: %5.1f slope: %8.5f noise : %8.5f \n", 
-	    ffs, angle*180/M_PI, slope, sqrt(sumsq[0]));
-  }
+  ffs = angle / (2 * M_PI) * DAB_F_C;
+  /* fprintf(stderr, "\n%f\n",ffs); */
 
   return ffs;
 }

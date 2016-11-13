@@ -74,7 +74,7 @@ int weaknums = 0;
 // val: already normalized by dqpsk_step
 uint8_t scale_double2ubyte(double val)
 {
-  int weak=128;
+  /* int weak=128; */
   int mid = 128;
   int lo = mid - VITERBI_CLAMP_SCALE;
   int hi = mid + VITERBI_CLAMP_SCALE - 1;
@@ -295,13 +295,7 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
 
 
   /* fine freq correction */
-  // the old method has better range (covers the full 1kHz that is left after cfs)
-  double ffs_long = dab_fine_freq_corr(sdr->dab_frame);
-  // use (avarage) phase shift here to compute fine frequency shift (more stable)
-  double ffs_short = ffs_from_phase(sdr->symbols_d);
-  double ffs45 = DAB_F_C / 8.0;  // frequency shift for 45 degree phase error (125)
-  double ffs_long_cut = round(ffs_long/ffs45) * ffs45;
-  sdr->fine_freq_shift = ffs_long_cut + ffs_short;
+  sdr->fine_freq_shift = dab_fine_freq_corr(sdr->dab_frame);
   int newTime = 0;// time_sync_full(sdr->dab_frame);
   fprintf(stderr, "STATS: fifo: %4.2f ffs: %6.1f  cfs: %2d; time: %4d\n", 
 	  sdr->fifo.count/2.0/DAB_T_FRAME, 
