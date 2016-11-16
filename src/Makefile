@@ -1,13 +1,24 @@
 CC=gcc
-# PROFILEFLAGS=-pg
-CFLAGS=-O3 -W -Wall -g -ffast-math $(PROFILEFLAGS)
+PROFILEFLAGS=-pg
+
+OPTARGS=-ffast-math -mfpmath=sse
+# -ffast-math: -fno-math-errno, -funsafe-math-optimizations, -ffinite-math-only, -fno-rounding-math,
+#            -fno-signaling-nans and -fcx-limited-range
+# -funsafe-math-optimizations: -fno-signed-zeros, -fno-trapping-math, -fassociative-math and
+#            -freciprocal-math
+# -fno-rounding-math: on by default; allows constant folding
+# -mfpmath=sse
+# -msse -msse2 -msse3 : enable instruction sets
+
+
+CFLAGS=-O3 -W -Wall -g $(OPTARGS) $(PROFILEFLAGS)
 LDFLAGS=-lm -lfftw3 -lpthread -g $(PROFILEFLAGS)
 
 CFLAGS+=$(shell pkg-config --cflags librtlsdr)
 LDFLAGS+=$(shell pkg-config --libs librtlsdr)
 
 # Uncomment the following line to use the fast, but x86-only Spiral Viterbi function.
-#ENABLE_SPIRAL_VITERBI=yes
+ENABLE_SPIRAL_VITERBI=yes
 
 ifdef ENABLE_SPIRAL_VITERBI
   CFLAGS+=-DENABLE_SPIRAL_VITERBI -msse2 -msse3 -std=gnu99 
