@@ -45,7 +45,7 @@ void cpx_mul(fftw_complex a, fftw_complex b, float bConjSign, fftw_complex *res)
 
 int dab_time_sync_still_good(int8_t * real)
 {
-  int32_t j,k;
+  int j,k;
 
   // check for energy in fist DAB_T_NULL samples
   float e=0;
@@ -58,7 +58,7 @@ int dab_time_sync_still_good(int8_t * real)
   j=3331;
   for (k=0; k<DAB_T_NULL; k+=FILT_SAMPLING) {
     eFullFrame += (float) abs(real[j % DAB_T_FRAME]);
-    j = (j + 31)*331 % 33333331;  // note: 33*1 used here are all prime
+    j = (j + 331)*31 % 33333331;  // note: 33*1 used here are all prime
   }
 
   float ratio = e/eFullFrame;
@@ -73,7 +73,7 @@ int dab_time_sync_still_good(int8_t * real)
 
 int dab_coarse_time_sync_sub(int8_t * real)
 {
-  int32_t j;
+  int j;
   float filt[(DAB_T_FRAME-DAB_T_NULL)/FILT_SAMPLING + 1];
 
   //fprintf(stderr,"Resync\n");
@@ -127,7 +127,7 @@ int dab_coarse_time_sync_sub(int8_t * real)
 // filt: temporary buffer to do work
 // force_timesync: boolean, timesync is done anyway; (after big events)
 // ret: bytes (2*samples) of shift; should be multiple of 20
-int dab_coarse_time_sync(int8_t * real, uint8_t force_timesync) {
+int dab_coarse_time_sync(int8_t * real, int force_timesync) {
   if (force_timesync || !dab_time_sync_still_good(real)) {
     return dab_coarse_time_sync_sub(real);
   }
@@ -144,13 +144,22 @@ int dab_coarse_time_sync(int8_t * real, uint8_t force_timesync) {
 
 
 // start can be negative up to >=-DAB_T_NULL
-int time_sync_sub(fftw_complex * frame, int start, int end, int step)
+int time_sync_sub(fftw_complex * frame, double * rmin, double * rmax, int start, int end, int step)
 {
   // assume most DC offset is removed by hardware
   double sum = 0.0;
-  double minVal = sum;
-  int minPos = start;
   int i;
+
+  if ( rmin != NULL || rmax != NULL) {
+    for (i = start; i < end; i += step) {
+      int il = (i + DAB_T_FRAME) % DAB_T_FRAME;
+      sum += mag_squared(frame[il]);
+    }
+  }
+
+  int minPos = start;
+  double minVal = sum;
+  double maxVal = sum;
   for (i = start; i < end; i += step) {
     int il = (i + DAB_T_FRAME) % DAB_T_FRAME;
     int ir = (i + DAB_T_NULL) % DAB_T_FRAME;
@@ -160,20 +169,32 @@ int time_sync_sub(fftw_complex * frame, int start, int end, int step)
       minVal = sum;
       minPos = i;
     }
+    else if (sum > maxVal) {
+      maxVal = sum;
+    }
   }
-  /* fprintf(stderr, "SUB MINPOS/VAL : %6d %8.3f\n", minPos, minVal); */
+
+  if (rmin != NULL) { *rmin = minVal; }
+  if (rmax != NULL) { *rmax = maxVal; }
+  /* fprintf(stderr, "SUB MINPOS/VAL : %6d %8.3f %8.3f\n", 2*minPos, minVal, maxVal); */
   return minPos;
+}
+
+int time_sync_still_good_2(fftw_complex * frame) {
+  double min, max;
+  int ts = time_sync_sub(frame, &min, &max, -DAB_T_NULL/2, DAB_T_NULL/2, 1);
+  return abs(ts) < DAB_T_NULL/4 && min < REALATIVE_ENERGY_THRESHOLD * max;
 }
 
 int time_sync_full(fftw_complex * frame) 
 {
   int step = TIME_SYNC_INIT_STEP;
   int neigh = 3;
-  int ts1 = time_sync_sub(frame, 0, DAB_T_FRAME - neigh*step, step);
+  int ts1 = time_sync_sub(frame, NULL, NULL, 0, DAB_T_FRAME - neigh*step, step);
   if (ts1 > DAB_T_FRAME - DAB_T_NULL + neigh*step) {
     ts1 -= DAB_T_FRAME;
   }
-  int ts2 = time_sync_sub(frame, ts1 - neigh*step, ts1 + neigh*step, 1);
+  int ts2 = time_sync_sub(frame, NULL, NULL, ts1 - neigh*step, ts1 + neigh*step, 1);
   return 2*ts2; // bytes
 }
 
@@ -248,7 +269,7 @@ void debug_time_sync(fftw_complex * frame)
 // determines fine time shift (within symbol) by convoluting the PRS
 // frame: start of frame with (previous) timeshifts applied -> starts with null symbol
 // ret: new timeshift (in bytes to skip = 2*samples) relative to the frame input
-int32_t dab_fine_time_sync(fftw_complex * frame)
+int dab_fine_time_sync(fftw_complex * frame)
 {
   // debug_time_sync(frame);
 
@@ -303,7 +324,7 @@ int32_t dab_fine_time_sync(fftw_complex * frame)
   fftw_destroy_plan(px);
   debug_print_array(DAB_CARRIERS, convoluted_prs_time, "convoluted_prs_time.dat");
 
-  uint32_t maxPos=0;
+  int maxPos=0;
   float maxVal=-99999;
   for (i=0; i<DAB_CARRIERS; i++) {
     float tempVal = cpx_abs(convoluted_prs_time[i]);
@@ -333,7 +354,7 @@ int32_t dab_fine_time_sync(fftw_complex * frame)
 
 // idea: find center of mas of active frequencies, avarage over all frames
 // return frequency shift in DAB_F_C(=kHz)
-int32_t dab_coarse_freq_sync_4(int symcount, fftw_complex (*symbols)[DAB_T_CS])
+int dab_coarse_freq_sync_4(int symcount, fftw_complex (*symbols)[DAB_T_CS])
 {
   int usedWidth = DAB_CARRIERS + 1;  // the middle frequency (tuner mixing) is not used
   int middlePos = DAB_CARRIERS/2;  // i.e.: somewhat towards lower indices

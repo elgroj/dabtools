@@ -28,12 +28,11 @@ david.may.muc@googlemail.com
 
 double cpx_abs(fftw_complex sample);
 
-int dab_coarse_time_sync(int8_t * real, uint8_t force_timesync);
-int32_t dab_fine_time_sync(fftw_complex * frame);
-int time_sync_sub(fftw_complex * frame, int start, int end, int step);
+int dab_coarse_time_sync(int8_t * real, int force_timesync);
+int dab_fine_time_sync(fftw_complex * frame);
 int time_sync_full(fftw_complex * frame);
 
-int32_t dab_coarse_freq_sync_4(int symcount, fftw_complex (*symbols)[DAB_T_CS]);
+int dab_coarse_freq_sync_4(int symcount, fftw_complex (*symbols)[DAB_T_CS]);
 double dab_fine_freq_corr(fftw_complex * dab_frame);
 double ffs_from_phase(fftw_complex * symbols_d);
 
