@@ -105,7 +105,7 @@ static void *demod_thread_fn(void *arg)
       sdr->frequency += sdr->fine_freq_shift;
     }
     else if (blockFreqShift > 0) {
-      fprintf(stderr,"frequency shifts blocked so readings stabilize: %d\n", blockFreqShift);
+      /* fprintf(stderr,"frequency shifts blocked so readings stabilize: %d\n", blockFreqShift); */
       sdr->force_timesync = 1;
     }
 
