@@ -19,7 +19,7 @@
 // extra gain (besides VITERBI_SCALE) for converting normalized dqpsk values into viterbi symbols
 #define SCALING_GAIN 4.0
 
-// FIXME magic threshold was 50.0
+// magic threshold was 50.0
 // fine frequency shifts below this threshold in Hz will be ignored
 // (there is always a risk of loosing lock after a frequency change)
 #define FFS_THRESHOLD 35.0
@@ -40,5 +40,6 @@
 
 // similar thing for new time sync: first pass will be done with this as a stride
 #define TIME_SYNC_INIT_STEP 5
+#define FINE_TIME_SHIFT_MAX 1000
 
 #endif

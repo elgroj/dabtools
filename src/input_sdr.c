@@ -245,15 +245,12 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
 
   prepare_data(sdr);
 
-  // FIXME tunable
   // should be < DAB_T_NULL because otherwise we potentially unread real signals from the queue
   // prpbably also better < DAB_T_NULL/2 for dab_fine_time_sync to work
-  int fine_time_shift_max = 1000;
+  int fine_time_shift_max = FINE_TIME_SHIFT_MAX;
 
   /* coarse time sync */
   /* performance bottleneck atm */
-  // FIXME work in progress
-  /* sdr->coarse_timeshift = dab_coarse_time_sync(sdr->real, sdr->force_timesync); */
   int doTimeSync = sdr->force_timesync || !time_sync_still_good_2(sdr->dab_frame);
   if (sdr->force_timesync) {
     fprintf(stderr, "(T)"); 
