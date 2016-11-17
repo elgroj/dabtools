@@ -183,17 +183,6 @@ void deinterlaceScale(struct demapped_transmission_frame_t *tf, struct sdr_state
 void __attribute__ ((noinline)) prepare_data(struct sdr_state_t *sdr) 
 {
   int j;
-  /* complex data conversion (also unsigned byte to signed) ; aka I/Q-samples */
-  /* for (j=0; j<DAB_T_FRAME*2; j+=2) { */
-  /*   sdr->real[j/2] = sdr->buffer[j] - 128; */
-  /*   sdr->imag[j/2] = sdr->buffer[j+1] - 128; */
-  /* } */
-  /* /\* create complex frame *\/ */
-  /* for (j=0; j<DAB_T_FRAME; j++) { */
-  /*   sdr->dab_frame[j][0] = sdr->real[j]; */
-  /*   sdr->dab_frame[j][1] = sdr->imag[j]; */
-  /* } */
-
   for (j=0; j<DAB_T_FRAME; j++) {
     sdr->dab_frame[j][0] = sdr->buffer[2*j]     - 128;
     sdr->dab_frame[j][1] = sdr->buffer[2*j + 1] - 128;
@@ -250,7 +239,7 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
   int fine_time_shift_max = FINE_TIME_SHIFT_MAX;
 
   /* coarse time sync */
-  /* performance bottleneck atm */
+  /* performance bottleneck atm (???) */
   int doTimeSync = sdr->force_timesync || !time_sync_still_good_2(sdr->dab_frame);
   if (sdr->force_timesync) {
     fprintf(stderr, "(T)"); 
@@ -321,7 +310,6 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
 
   /* fine freq correction */
   sdr->fine_freq_shift = dab_fine_freq_corr(sdr->dab_frame);
-  /* int newTime = 0;// time_sync_full(sdr->dab_frame); */
   fprintf(stderr, "STATS: fifo: %4.2f ffs: %6.1f  cfs: %2d; time: %4d\n", 
 	  sdr->fifo.count/2.0/DAB_T_FRAME, 
 	  sdr->fine_freq_shift, sdr->coarse_freq_shift, 
