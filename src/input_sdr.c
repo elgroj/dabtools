@@ -43,7 +43,7 @@ void swap_blocks(int len, fftw_complex* sym)
 }
 
 
-void samples_fft_swap(fftw_complex* samples, fftw_complex* symbols)
+void __attribute__ ((noinline)) samples_fft_swap(fftw_complex* samples, fftw_complex* symbols)
 {
   // fftw_plan fftw_plan_dft_1d(int n, fftw_complex *in, fftw_complex *out, int sign, unsigned flags); 
   fftw_plan p = fftw_plan_dft_1d(DAB_T_CS, samples, symbols, FFTW_FORWARD, FFTW_ESTIMATE);
@@ -61,11 +61,53 @@ void dqpsk_step(fftw_complex a, fftw_complex b, fftw_complex *out, double normal
   (*out)[1] = (a[0]*b[1] - a[1]*b[0]) * normalizer;
 }
 
+// gain = 3.0:
+// [12:112] DECODING STATS 0.033 0.035 0.26135     230400
+// [12:113] DECODING STATS 0.175 0.180 0.10523     230400
+// [12:114] DECODING STATS 0.278 0.281 0.07925     230400
+// [12:115] DECODING STATS 0.185 0.189 0.10958     230400
+
 
 double clampf(double d, double min, double max) {
   const double t = d < min ? min : d;
   return t > max ? max : t;
 }
+
+// scale_double2ubyte:
+  //  %   cumulative   self              self     total           
+  //  time   seconds   seconds    calls  ms/call  ms/call  name    
+  //  %time    self  children    called     name
+  //  ----------------------------------------------------------------------
+
+  // simple: 
+  /* return (val>0) ? 255 : 0; */
+  //  57.69      0.45     0.45     5028     0.09     0.09  FULL_SPIRAL
+  //  16.67      0.58     0.13      183     0.71     0.77  sdr_demod
+  
+  //  17.9    0.13    0.01     183         sdr_demod [6]
+
+
+  // full using clampf, paren grouping, one expression
+  //  43.02      0.37     0.37     4908     0.08     0.08  FULL_SPIRAL
+  //  20.93      0.55     0.18      179     1.01     1.68  sdr_demod
+  //  12.79      0.66     0.11      111     0.99     0.99  deinterlaceScale
+  
+  //  34.9    0.18    0.12     179         sdr_demod [6]
+  //  12.8    0.11    0.00     111         deinterlaceScale [7]
+
+  // same with -mfpmath=sse (all others with -ffast-math only
+  //  22.09      0.80     0.36      604     0.60     0.60  deinterlaceScale
+
+  // using rint and clampi
+  //  19.20      0.78     0.24      197     1.22     1.22  deinterlaceScale
+
+  // risky: 
+  /* return val *  64 + 128; */
+  //  46.25      0.37     0.37     5564     0.07     0.07  FULL_SPIRAL
+  //  18.75      0.52     0.15      421     0.36     1.47  create_eti
+  //  12.50      0.62     0.10      199     0.50     0.65  sdr_demod
+
+  //  16.2    0.10    0.03     199         sdr_demod [6]
 
 // val: already normalized by dqpsk_step
 uint8_t scale_double2ubyte(double val)
@@ -74,7 +116,7 @@ uint8_t scale_double2ubyte(double val)
   return clampf((VITERBI_SCALE * SCALING_GAIN * val) + 128, 0, 255);
 }
 
-double calcAvg(struct sdr_state_t *sdr) 
+double __attribute__ ((noinline)) calcAvg(struct sdr_state_t *sdr) 
 {
   double valueSum = 0;
   double valueSqSum = 0;
@@ -136,7 +178,9 @@ void deinterlaceScale(struct demapped_transmission_frame_t *tf, struct sdr_state
   }
 }
 
-void prepare_data(struct sdr_state_t *sdr) 
+// old: 1.26    0.00    1019/1019        prepare_data [8]
+// new: 0.12    0.00     705/705         prepare_data [10]
+void __attribute__ ((noinline)) prepare_data(struct sdr_state_t *sdr) 
 {
   int j;
   for (j=0; j<DAB_T_FRAME; j++) {
@@ -235,6 +279,8 @@ int sdr_demod(struct demapped_transmission_frame_t *tf, struct sdr_state_t *sdr)
     samples_fft_swap(&sdr->dab_frame[DAB_T_NULL + j*DAB_T_SYM + DAB_T_GUARD/2], sdr->symbols[j]);
   }
   int cfs4 = dab_coarse_freq_sync_4(CFS_SYM_COUNT, sdr->symbols);
+  /* int cfs3 = dab_coarse_freq_sync_3(CFS_SYM_COUNT, sdr->symbols); */
+  /* int cfs2 = dab_coarse_freq_sync_2(sdr->symbols[0]); */
   int coarse_freq_shift = cfs4;
   if (abs(coarse_freq_shift) >= 1) {
     sdr->coarse_freq_shift = coarse_freq_shift;
